@@ -350,6 +350,26 @@ class BatchDeleteResponse(BaseModel):
     batch_deleted: bool
 
 
+class DocumentDeleteResponse(BaseModel):
+    """What a single-document purge removed.
+
+    Unlike `BatchDeleteResponse` there is no `kept_*` field: this endpoint
+    deletes a document whatever its state, including confirmed records that
+    the schema views and the Ask page are serving. The counts are returned so
+    the caller can say what actually went.
+    """
+
+    deleted_document_id: uuid.UUID
+    deleted_job_ids: list[uuid.UUID]
+    deleted_record_count: int
+    deleted_chunk_count: int
+    # True when this was the batch's last document and the batch row went too.
+    batch_deleted: bool
+    # Set when the document's records were the last ones in their schema, so
+    # the caller can point out that the schema is now empty.
+    emptied_schema_id: uuid.UUID | None = None
+
+
 class BatchOut(BaseModel):
     id: uuid.UUID
     created_at: datetime

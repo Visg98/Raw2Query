@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Batch, Document, DocumentTopic, Job
+from app.models import Batch, Chunk, Document, DocumentTopic, ExtractedRecord, Job
 from app.preview import (
     build_element_preview,
     delimiter_for,
@@ -21,6 +21,7 @@ from app.preview import (
     resolve_media_type,
 )
 from app.schemas_pydantic import (
+    DocumentDeleteResponse,
     DocumentDetailOut,
     DocumentOut,
     DocumentPreviewOut,
@@ -29,7 +30,7 @@ from app.schemas_pydantic import (
     UploadResponse,
 )
 from app.serializers import document_detail_out, document_out
-from app.storage import compute_hash, write_file
+from app.storage import compute_hash, delete_file, write_file
 
 logger = logging.getLogger(__name__)
 
@@ -236,4 +237,93 @@ def get_document_preview(document_id: uuid.UUID, db: Session = Depends(get_db)) 
         kind="elements",
         elements=[PreviewElement(**e) for e in elements],
         truncated=truncated,
+    )
+
+
+@router.delete("/documents/{document_id}", response_model=DocumentDeleteResponse)
+def delete_document(document_id: uuid.UUID, db: Session = Depends(get_db)) -> DocumentDeleteResponse:
+    """Erases one document and everything derived from it.
+
+    This is the loud counterpart to `DELETE /batches/{batch_id}`, which
+    deliberately keeps confirmed documents because their records and chunks
+    are live data. Here the caller has picked one document and asked for all
+    of it, so confirmed extracted records go too - the UI is expected to warn
+    first.
+
+    None of the four tables referencing `documents` has a DB-level cascade
+    (all are ON DELETE NO ACTION), so the order below is load-bearing: every
+    child row must go before the parent or Postgres raises a foreign-key
+    violation instead of deleting anything.
+
+    The `view_<schema>` views need no regeneration - they select from
+    `extracted_records`, so removing rows is enough. A schema left with no
+    records at all keeps its (now empty) view, and is reported back in
+    `emptied_schema_id` so the caller can mention it.
+    """
+    document = db.get(Document, document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="document not found")
+
+    batch_id = document.batch_id
+    storage_path = document.storage_path
+    schema_ids = {
+        row[0]
+        for row in db.query(ExtractedRecord.schema_id).filter(ExtractedRecord.document_id == document.id).all()
+        if row[0] is not None
+    }
+
+    deleted_job_ids = [job.id for job in list(document.jobs)]
+    record_count = (
+        db.query(ExtractedRecord).filter(ExtractedRecord.document_id == document.id).delete(synchronize_session=False)
+    )
+    chunk_count = db.query(Chunk).filter(Chunk.document_id == document.id).delete(synchronize_session=False)
+    db.query(DocumentTopic).filter(DocumentTopic.document_id == document.id).delete(synchronize_session=False)
+    db.query(Job).filter(Job.document_id == document.id).delete(synchronize_session=False)
+    db.delete(document)
+    db.flush()
+
+    # Drop the batch once it is empty, matching delete_batch's behaviour so
+    # the queues don't accumulate empty groups.
+    batch_deleted = False
+    if batch_id is not None:
+        still_referenced = (
+            db.query(Document.id).filter(Document.batch_id == batch_id).first() is not None
+            or db.query(Job.id).filter(Job.batch_id == batch_id).first() is not None
+        )
+        if not still_referenced:
+            batch = db.get(Batch, batch_id)
+            if batch is not None:
+                db.delete(batch)
+                batch_deleted = True
+
+    emptied_schema_id = next(
+        (
+            schema_id
+            for schema_id in schema_ids
+            if db.query(ExtractedRecord.id).filter(ExtractedRecord.schema_id == schema_id).first() is None
+        ),
+        None,
+    )
+
+    db.commit()
+
+    # After the commit, never before: a row deletion can be rolled back, an
+    # unlinked file cannot.
+    delete_file(storage_path)
+
+    logger.info(
+        "deleted document %s (%s): %d record(s), %d chunk(s), %d job(s)",
+        document_id,
+        document.filename,
+        record_count,
+        chunk_count,
+        len(deleted_job_ids),
+    )
+    return DocumentDeleteResponse(
+        deleted_document_id=document_id,
+        deleted_job_ids=deleted_job_ids,
+        deleted_record_count=record_count,
+        deleted_chunk_count=chunk_count,
+        batch_deleted=batch_deleted,
+        emptied_schema_id=emptied_schema_id,
     )
