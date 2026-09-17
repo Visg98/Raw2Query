@@ -264,21 +264,39 @@ def delete_document(document_id: uuid.UUID, db: Session = Depends(get_db)) -> Do
     if document is None:
         raise HTTPException(status_code=404, detail="document not found")
 
+    # Read everything needed off the instance up front. After the delete and
+    # commit below the instance is expired and touching an attribute would
+    # raise, so the log line at the end cannot reach for `document.filename`.
     batch_id = document.batch_id
     storage_path = document.storage_path
+    filename = document.filename
     schema_ids = {
         row[0]
         for row in db.query(ExtractedRecord.schema_id).filter(ExtractedRecord.document_id == document.id).all()
         if row[0] is not None
     }
 
-    deleted_job_ids = [job.id for job in list(document.jobs)]
+    # Collect the job ids with a column query rather than via `document.jobs`:
+    # loading the relationship would put Job instances in the identity map,
+    # and the bulk delete below removes their rows without the session
+    # noticing, so the flush would then fail trying to update them.
+    deleted_job_ids = [row[0] for row in db.query(Job.id).filter(Job.document_id == document.id).all()]
+
     record_count = (
         db.query(ExtractedRecord).filter(ExtractedRecord.document_id == document.id).delete(synchronize_session=False)
     )
     chunk_count = db.query(Chunk).filter(Chunk.document_id == document.id).delete(synchronize_session=False)
     db.query(DocumentTopic).filter(DocumentTopic.document_id == document.id).delete(synchronize_session=False)
     db.query(Job).filter(Job.document_id == document.id).delete(synchronize_session=False)
+
+    # `Document.jobs`, `.extracted_records` and `.chunks` are relationships
+    # with no cascade, so deleting the parent makes SQLAlchemy load each
+    # collection and null out the children's `document_id` to de-associate
+    # them. Those rows are already gone, so the UPDATE matches nothing and
+    # the flush raises StaleDataError. Expiring the instance first drops any
+    # loaded collections, so they reload as empty and there is nothing left
+    # to de-associate.
+    db.expire(document)
     db.delete(document)
     db.flush()
 
@@ -314,7 +332,7 @@ def delete_document(document_id: uuid.UUID, db: Session = Depends(get_db)) -> Do
     logger.info(
         "deleted document %s (%s): %d record(s), %d chunk(s), %d job(s)",
         document_id,
-        document.filename,
+        filename,
         record_count,
         chunk_count,
         len(deleted_job_ids),
