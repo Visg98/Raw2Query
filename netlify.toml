@@ -3,6 +3,14 @@
   command = "npm run build"
   publish = "dist"
 
+[build.environment]
+  # Pinned deliberately. Vite 8 and @vitejs/plugin-react both declare
+  # engines: ^20.19.0 || >=22.12.0, and Netlify's default Node version is a
+  # rolling target - an unpinned build can work today and break later when that
+  # default moves, with a confusing "Unsupported engine" failure. 22 is the
+  # current LTS line and satisfies every dependency's constraint.
+  NODE_VERSION = "22"
+
 # The frontend is a react-router SPA, so only "/" exists as a real file. Every
 # other path is resolved client-side, and without this Netlify would serve its
 # own 404 for a deep link or a page refresh on /query, /review, /schemas, etc.
