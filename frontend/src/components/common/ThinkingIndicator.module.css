@@ -1,0 +1,36 @@
+.wrapper {
+  /* Centred column: the animation is the focus of the wait, with the
+     label under it rather than beside it. */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-5) 0;
+  width: 100%;
+  text-align: center;
+}
+
+.slot {
+  flex: 0 0 auto;
+}
+
+.label {
+  color: var(--color-text-muted);
+  font-size: 14px;
+  font-weight: 500;
+  /* A slow pulse on the text alone; the Lottie carries the motion, so a
+     second competing animation on the whole row would be noise. */
+  animation: thinking-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes thinking-pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .label {
+    animation: none;
+  }
+}

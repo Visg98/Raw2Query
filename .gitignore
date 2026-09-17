@@ -1,0 +1,24 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+.env
+
+data/uploads/*
+!data/uploads/.gitkeep
+
+.pytest_cache/
+.ruff_cache/
+
+logs/
+
+node_modules/
+
+# Upstream `unstructured` source clone, kept locally for reference only. It is
+# a separate git repo and nothing in app/ imports from this path - the package
+# comes from PyPI via pyproject.toml.
+unstructured/

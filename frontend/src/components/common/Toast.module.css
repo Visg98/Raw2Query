@@ -1,0 +1,32 @@
+.stack {
+  position: fixed;
+  bottom: var(--space-5);
+  right: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  z-index: 1000;
+  max-width: 360px;
+}
+
+.toast {
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--color-text);
+  color: var(--brand-white);
+  box-shadow: var(--shadow-md);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.error {
+  background: var(--color-danger);
+}
+
+.success {
+  background: var(--color-success);
+}
+
+.info {
+  background: var(--color-text);
+}

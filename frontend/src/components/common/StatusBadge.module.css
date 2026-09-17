@@ -1,0 +1,39 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.pending, .unknown {
+  background: var(--color-neutral-bg);
+  color: var(--color-text-muted);
+}
+
+.extracting {
+  background: var(--color-info-bg);
+  color: var(--color-info-text);
+}
+
+.awaiting_review {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+
+.confirmed {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+.rejected {
+  background: var(--color-neutral-bg);
+  color: var(--color-text-muted);
+}
+
+.failed {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+}

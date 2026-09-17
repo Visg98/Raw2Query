@@ -1,0 +1,159 @@
+.viewer {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+.frame {
+  width: 100%;
+  border-radius: var(--radius-md);
+}
+
+.content {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  background: var(--color-bg);
+  border-radius: var(--radius-md);
+}
+
+.fill {
+  width: 100%;
+  height: 100%;
+  border: none;
+  display: block;
+  background: var(--color-surface);
+}
+
+.image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.media {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  height: 100%;
+  padding: var(--space-5);
+}
+
+.audio {
+  width: 100%;
+  max-width: 420px;
+}
+
+.video {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: var(--radius-sm);
+}
+
+.text {
+  margin: 0;
+  padding: var(--space-4);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  /* Wrap rather than scroll sideways: a long JSON or log line otherwise
+     hides the rest of the file behind a horizontal scrollbar. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--color-text);
+}
+
+.doc {
+  padding: var(--space-4) var(--space-5);
+  background: var(--color-surface);
+  min-height: 100%;
+}
+
+.heading {
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.heading:first-child {
+  margin-top: 0;
+}
+
+.paragraph {
+  margin: 0 0 var(--space-3);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.listItem {
+  display: flex;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+  padding-left: var(--space-2);
+}
+
+.pageBreak {
+  border: none;
+  border-top: 1px dashed var(--color-border);
+  margin: var(--space-5) 0;
+}
+
+.tableWrap {
+  overflow-x: auto;
+  margin: 0 0 var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12.5px;
+}
+
+.table th,
+.table td {
+  border-bottom: 1px solid var(--color-border);
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+  vertical-align: top;
+  white-space: pre-wrap;
+}
+
+.table th {
+  background: var(--color-bg);
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+}
+
+.table tr:last-child td {
+  border-bottom: none;
+}
+
+.fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  height: 100%;
+  min-height: 160px;
+  padding: var(--space-5);
+  text-align: center;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-top: var(--space-2);
+  font-size: 12px;
+  flex: 0 0 auto;
+}

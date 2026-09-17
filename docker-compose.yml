@@ -1,0 +1,83 @@
+# Local development: `docker compose up`.
+# Public VM deployment: see DEPLOY.md, which adds docker-compose.prod.yml.
+#
+# `api` and `worker` are the same image (docker/Dockerfile.api) with different
+# commands. Only `db` builds from an upstream image.
+
+x-backend: &backend
+  build:
+    context: .
+    dockerfile: docker/Dockerfile.api
+  env_file: .env
+  restart: unless-stopped
+  environment: &backend-env
+    DATABASE_URL: postgresql+psycopg://raw2query:raw2query@db:5432/raw2query
+    # migrations/versions/0001_initial.py reads POSTGRES_DB from the
+    # environment (not from DATABASE_URL) for its GRANT CONNECT, so it has to
+    # be set explicitly and match the database name above.
+    POSTGRES_DB: raw2query
+    UPLOAD_DIR: /app/data/uploads
+    HF_HOME: /opt/hf-cache
+    # Without this, tokenizers forks per call and warns on every request.
+    TOKENIZERS_PARALLELISM: "false"
+  volumes:
+    # The worker reads back the files the API wrote (extract.py calls
+    # partition(filename=...)), and previews/downloads re-read them later, so
+    # this volume must be shared by both and must persist.
+    - uploads:/app/data/uploads
+    - hf_cache:/opt/hf-cache
+  depends_on:
+    db:
+      condition: service_healthy
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: raw2query
+      POSTGRES_PASSWORD: raw2query
+      POSTGRES_DB: raw2query
+    # Deliberately NOT published. This used to be `ports: ["5432:5432"]`, which
+    # on a public VM exposes Postgres (password `raw2query`) to the internet.
+    # Docker publishes ports by DNAT in PREROUTING, which bypasses the iptables
+    # INPUT chain, so a host firewall would not have contained it either.
+    # Use `docker compose exec db psql` for admin access instead.
+    expose:
+      - "5432"
+    command:
+      - postgres
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - max_connections=50
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U raw2query"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      READONLY_DATABASE_URL: postgresql+psycopg://raw2query_query_runner:${QUERY_RUNNER_DB_PASSWORD:-raw2query_query_runner}@db:5432/raw2query
+      OMP_NUM_THREADS: "1"
+    ports:
+      - "8000:8000"
+
+  worker:
+    <<: *backend
+    command: ["python", "-m", "app.worker"]
+    environment:
+      <<: *backend-env
+      # Extraction is the CPU-bound half of the app; give it both cores.
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
+
+volumes:
+  db_data:
+  uploads:
+  hf_cache:

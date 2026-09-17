@@ -1,0 +1,42 @@
+# Keep the build context tiny. Without this, `context: .` ships the whole
+# working tree to the Docker daemon - .venv alone is 7.3GB - which on a
+# 2-core cloud VM costs more time than the build itself. The image only needs
+# pyproject.toml, app/, alembic.ini and migrations/.
+
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+
+# A separate clone of the upstream `unstructured` source (410MB), kept locally
+# for reference. The package itself comes from PyPI via pyproject.toml.
+unstructured/
+
+# Secrets never belong in an image layer. The API key is injected at runtime
+# via `env_file` / compose `environment`.
+.env
+frontend/.env
+
+# The frontend is built and served by Netlify, not by these images.
+frontend/
+
+# Real uploaded documents and their extracted output. These live in a volume.
+data/
+
+logs/
+.pytest_cache/
+.ruff_cache/
+tests/
+
+.git/
+.gitignore
+.claude/
+
+# Docs, not needed at runtime.
+README.md
+DEPLOY.md
+decisions.md
+plans.md

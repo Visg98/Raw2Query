@@ -1,0 +1,41 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.headerRow, .row {
+  display: grid;
+  /* name | type | scope | description | required | identity | remove */
+  grid-template-columns: 1.2fr 0.9fr 1.1fr 1.4fr 70px 90px 80px;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.headerRow {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--color-text-muted);
+  font-weight: 600;
+}
+
+/* Required and Identity key - the two checkbox columns, shifted by one now
+   that Scope sits between Type and Description. */
+.headerRow span:nth-child(5),
+.headerRow span:nth-child(6),
+.row input[type="checkbox"] {
+  justify-self: center;
+}
+
+@media (max-width: 720px) {
+  .headerRow {
+    display: none;
+  }
+  .row {
+    grid-template-columns: 1fr;
+    padding: var(--space-3);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+  }
+}

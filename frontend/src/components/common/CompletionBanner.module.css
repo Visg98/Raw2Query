@@ -1,0 +1,55 @@
+/* Deliberately not built on the global `.card` class. `.card` sets
+   `background: var(--color-surface)`, and a CSS-module class has the same
+   specificity as a global one, so which of the two wins comes down to
+   stylesheet order — which is why the gradient on this banner silently
+   rendered as plain white. The card look is restated here instead so the
+   background is the only declaration of its kind on the element. */
+.banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  margin-bottom: var(--space-4);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  /* The full-strength highlight, one of the few places that earns it: this
+     banner stands in for the batch the user was watching and is on screen
+     for three seconds, so it should be impossible to miss. */
+  background: linear-gradient(120deg, var(--color-highlight) 0%, var(--color-accent-soft) 70%);
+}
+
+.art {
+  flex: 0 0 auto;
+  /* A 320x320 composition — square box, no letterboxing. */
+  width: 120px;
+  height: 120px;
+  margin: calc(-1 * var(--space-2)) 0;
+}
+
+.copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.headline {
+  font-size: 16px;
+  color: var(--color-text);
+}
+
+/* Not `.muted`: the tinted background is too dark for the muted token to
+   hold its contrast, so this stays full-strength text. */
+.detail {
+  margin: 0;
+  color: var(--color-text);
+}
+
+@media (max-width: 720px) {
+  .banner {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-3);
+  }
+}

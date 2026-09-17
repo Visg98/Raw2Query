@@ -1,0 +1,67 @@
+# One image, two entrypoints: the API (`uvicorn app.api:app`) and the worker
+# (`python -m app.worker`), selected by the `command` in docker-compose.yml.
+#
+# There used to be a separate Dockerfile.worker on the theory that the API
+# could skip the OCR/torch stack. That was never true: pyproject.toml has a
+# single flat dependency list, so both images ran `pip install .` and built the
+# identical ~6GB tree. The API needs torch anyway - app/api.py imports the
+# query router, which reaches app/pipeline/embeddings.py via app/query/rag.py -
+# and it needs `unstructured` for document previews (app/preview.py). Building
+# one image instead of two halves the build time on a small VM.
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    # Shared with the API and worker containers via a volume so the embedding
+    # model and unstructured's ONNX layout/table models survive a restart.
+    HF_HOME=/opt/hf-cache
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential libpq-dev \
+    # `unstructured`'s OCR path: pdf rendering, tesseract, and the libGL that
+    # opencv links against. Needed by the worker; harmless in the API.
+    poppler-utils tesseract-ocr libgl1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install torch BEFORE the app, from PyTorch's CPU-only channel.
+#
+# This is not an optimisation, it is load-bearing. pyproject.toml pins no torch
+# variant, so a plain `pip install .` resolves the default PyPI wheel - which is
+# a CUDA build that drags in ~15 nvidia-* packages and several GB of CUDA
+# libraries, all dead weight on a CPU-only VM. It succeeds silently, so the only
+# symptom is a 6GB+ image.
+#
+# --index-url, not --extra-index-url: with the latter pip may still prefer the
+# PyPI CUDA wheel. torchvision is pinned too because unstructured-inference's
+# layout path can pull it, and an unpinned torchvision re-resolves torch back to
+# the CUDA build. 2.14.0/0.29.0 is the matching pair, and both publish
+# cp311 aarch64 wheels on this channel (ARM is what Oracle's free tier offers).
+# sentence-transformers only requires torch>=2.2, so nothing upgrades it later.
+RUN pip install --index-url https://download.pytorch.org/whl/cpu \
+    "torch==2.14.0+cpu" "torchvision==0.29.0+cpu"
+
+COPY pyproject.toml ./
+COPY app ./app
+
+# --only-binary=:all: makes a missing ARM wheel fail fast with the package name
+# instead of dropping into a 30-60 minute source build (onnx, opencv and scipy
+# all use cmake) that would get OOM-killed on a 2-core instance.
+RUN pip install --only-binary=:all: .
+
+# Alembic needs these at runtime. They were previously absent from the image,
+# which meant `alembic upgrade head` could not run in a container at all - the
+# only path was run.sh invoking it from a host venv. A fresh deployment has no
+# other way to create its schema.
+COPY alembic.ini ./
+COPY migrations ./migrations
+
+# Bake the embedding model into the image. app/pipeline/embeddings.py loads it
+# lazily on first use, so without this the first query pays a ~130MB download
+# and fails outright if HuggingFace is unreachable or rate-limiting.
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-small-en-v1.5')"
+
+EXPOSE 8000
+CMD ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000"]

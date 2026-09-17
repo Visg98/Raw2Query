@@ -1,0 +1,161 @@
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  /* Sticky rather than fixed-height: the conversation column scrolls with
+     the page, the sidebar stays put beside it. */
+  position: sticky;
+  top: var(--space-4);
+  align-self: start;
+  max-height: calc(100vh - var(--space-6) * 2);
+  min-width: 0;
+}
+
+.newChat {
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  min-height: 0;
+  /* Room for the hover actions, which sit inside the row's right edge. */
+  padding-right: 2px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  min-width: 0;
+}
+
+.row:hover {
+  background: var(--color-surface);
+}
+
+/* The open chat, drawn the same way as the current nav item: solid
+   primary, white text. The pale tint it used before was only a shade off
+   the hover state, so scanning the list you could not tell which one you
+   were in from which one you were pointing at. */
+.active,
+.active:hover {
+  background: var(--color-selected-bg);
+  color: var(--color-selected-text);
+}
+
+/* Everything inside the row that had its own colour has to come with it —
+   muted grey and the icon buttons' grey both disappear on blue. */
+.active .preview,
+.active .draftHint {
+  color: var(--color-selected-text-muted);
+}
+
+.active .iconButton {
+  color: var(--color-selected-text-muted);
+}
+
+.active .iconButton:hover {
+  color: var(--color-selected-text);
+  background: color-mix(in srgb, var(--brand-white) 22%, transparent);
+}
+
+.draft {
+  justify-content: space-between;
+  font-size: 13px;
+}
+
+.draftHint {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+  flex: 0 0 auto;
+}
+
+.rowButton {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+}
+
+.title {
+  font-size: 13px;
+  font-weight: 500;
+  /* One line, ellipsised — the sidebar is a scan list, not a preview pane. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.preview {
+  font-size: 11.5px;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rowActions {
+  display: flex;
+  gap: 2px;
+  flex: 0 0 auto;
+  /* Revealed on hover/focus so the list stays quiet at rest; still
+     keyboard-reachable because focus-within counts. */
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.row:hover .rowActions,
+.row:focus-within .rowActions {
+  opacity: 1;
+}
+
+.iconButton {
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1;
+  padding: var(--space-1);
+  border-radius: var(--radius-sm);
+}
+
+.iconButton:hover {
+  color: var(--color-text);
+  background: var(--color-bg);
+}
+
+.renameInput {
+  width: 100%;
+  font: inherit;
+  font-size: 13px;
+  padding: 2px var(--space-2);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.rowSkeleton {
+  height: 34px;
+}
+
+.empty {
+  font-size: 12.5px;
+  padding: var(--space-2) var(--space-3);
+  margin: 0;
+}

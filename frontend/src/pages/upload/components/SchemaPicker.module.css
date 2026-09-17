@@ -1,0 +1,94 @@
+.options {
+  display: grid;
+  /* Three across on a normal window, and the `minmax(0, 1fr)` keeps them
+     even — `auto-fit` alone lets the longest description widen its own
+     card, which reads as one option being recommended. */
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+/* A button, not a label wrapping a hidden radio: these are the full-size
+   targets now, and a native button gets keyboard activation, focus-visible
+   and disabled handling without re-implementing any of it. The radio
+   semantics come back through role/aria-checked on the group. */
+.option {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  text-align: left;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  transition: border-color 0.12s, background 0.12s, box-shadow 0.12s;
+}
+
+/* Hover is the pale highlight — "you could pick this" — which leaves the
+   solid fill below to mean "picked". */
+.option:hover:not(.selected) {
+  border-color: var(--color-border-strong);
+  background: var(--color-hover-bg);
+  box-shadow: var(--shadow-md);
+}
+
+/* The chosen card fills with primary and flips its text white. A pale
+   wash with primary text was the previous treatment and read as a
+   disabled card: mid-blue on light blue is barely 2:1. */
+.selected {
+  border-color: var(--color-selected-bg);
+  /* An inset ring rather than a thicker border: a 2px border would reflow
+     the card's content by a pixel as the selection moves between cards. */
+  box-shadow: inset 0 0 0 1px var(--color-selected-bg);
+  background: var(--color-selected-bg);
+}
+
+.selected:hover {
+  background: var(--color-selected-hover-bg);
+}
+
+.name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.selected .name {
+  color: var(--color-selected-text);
+}
+
+/* The filled dot that marks the chosen card — the one piece of the radio
+   affordance worth keeping, since three cards with only a colour change
+   between them don't say "pick exactly one". */
+.marker {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+}
+
+/* Inverted against the filled card: white ring, blue gap, white centre.
+   The unselected dot's colours would both be invisible here — a primary
+   fill on a primary card. */
+.selected .marker {
+  border-color: var(--color-selected-text);
+  /* Ring, not a solid fill: the gap reads as a radio dot at this size. */
+  box-shadow: inset 0 0 0 3px var(--color-selected-bg);
+  background: var(--color-selected-text);
+}
+
+.description {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--color-text-muted);
+}
+
+.selected .description {
+  color: var(--color-selected-text-muted);
+}

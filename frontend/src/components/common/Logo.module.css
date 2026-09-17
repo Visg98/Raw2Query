@@ -1,0 +1,22 @@
+.wordmark {
+  display: block;
+  /* The artwork is 1280x428 (≈3:1), so this height renders ~155px wide.
+     The expanded nav's brand row has ~208px of usable width and gives 36px
+     of it to the collapse toggle, so this is about as large as the wordmark
+     goes before the two start fighting. */
+  height: 52px;
+  width: auto;
+  /* The artwork is a JPEG on white; on the white side nav the block is
+     invisible, and the radius keeps its corners from meeting a tinted
+     hover fill as hard edges. */
+  border-radius: 3px;
+}
+
+.mark {
+  display: block;
+  /* The collapsed rail is 72px wide with 8px of padding a side, so 44px
+     leaves the square mark breathing room rather than filling the rail. */
+  height: 44px;
+  width: 44px;
+  border-radius: var(--radius-md);
+}

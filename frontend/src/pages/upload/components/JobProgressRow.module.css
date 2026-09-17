@@ -1,0 +1,41 @@
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-2);
+}
+
+.filename {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progressTrack {
+  width: 120px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-border);
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  background: var(--color-primary);
+  transition: width 0.2s ease;
+}
+
+.step {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  width: 110px;
+}
+
+.error {
+  color: var(--color-danger);
+  font-size: 12.5px;
+}

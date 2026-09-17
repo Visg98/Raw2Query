@@ -1,0 +1,21 @@
+[build]
+  base = "frontend"
+  command = "npm run build"
+  publish = "dist"
+
+# The frontend is a react-router SPA, so only "/" exists as a real file. Every
+# other path is resolved client-side, and without this Netlify would serve its
+# own 404 for a deep link or a page refresh on /query, /review, /schemas, etc.
+# Status 200 (not 301) so the URL the user sees is preserved.
+#
+# Note: this is the only redirect source. Adding frontend/public/_redirects as
+# well would silently take precedence over this file.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# VITE_API_BASE_URL and VITE_DEMO_TOKEN are set in the Netlify UI
+# (Site configuration -> Environment variables), not here, so the token stays
+# out of the repo. Vite inlines both at BUILD time, so changing either one
+# requires a new deploy - restarting nothing will pick it up.

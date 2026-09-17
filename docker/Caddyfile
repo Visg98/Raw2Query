@@ -1,0 +1,58 @@
+# TLS termination and the demo gate. DOMAIN and DEMO_TOKEN come from .env via
+# docker-compose.prod.yml.
+#
+# TLS is not optional here: the frontend is served from Netlify over HTTPS, and
+# a browser blocks an HTTPS page from calling a plain-HTTP API as mixed content.
+# Caddy provisions and renews a Let's Encrypt certificate for {$DOMAIN}
+# automatically over HTTP-01, which is why ports 80 and 443 both have to be
+# open - port 80 is the challenge, not just a redirect.
+
+{$DOMAIN} {
+	# app/routers/documents.py reads each upload fully into memory
+	# (`upload.file.read()`) once per file in the batch, so an unbounded body is
+	# an easy way to OOM the API. Enforce the ceiling at the edge instead of
+	# changing the handler.
+	request_body {
+		max_size 50MB
+	}
+
+	# Reject anything without the shared token, with two deliberate exemptions.
+	#
+	# 1. OPTIONS. This is mandatory, not defensive: sending a custom header
+	#    cross-origin makes the browser issue a CORS preflight, and that OPTIONS
+	#    request does not carry the header. Gate it and every single request
+	#    from Netlify fails before the real call is made. FastAPI's
+	#    CORSMiddleware (allow_headers=["*"]) answers the preflight once Caddy
+	#    passes it through.
+	#
+	# 2. GET on /documents/* and /jobs/*. These are the two places the browser
+	#    cannot attach a header even if it wanted to: fileUrl() in
+	#    frontend/src/api/client.js feeds <img>/<a> src attributes directly, and
+	#    /jobs/{id}/events is consumed by EventSource, which has no headers API.
+	#    Gating them would break every document preview and force the progress
+	#    UI onto its polling fallback. They are read-only and keyed by
+	#    unguessable UUIDs, and - the point of the gate - they cost no LLM
+	#    calls. Upload (POST /documents), /query and /chats stay gated, which is
+	#    where the actual spend and abuse potential live.
+	#
+	# This stops crawlers and drive-by scanners, not a determined person - the
+	# token ships inside a public JS bundle. That is the right threat model for
+	# a short-lived interview demo, and it is why the LLM provider's own rate
+	# limit is the real backstop.
+	@unauthorized {
+		not header X-Demo-Token "{$DEMO_TOKEN}"
+		not method OPTIONS
+		not {
+			method GET
+			path /documents/* /jobs/*
+		}
+	}
+	respond @unauthorized "forbidden" 403
+
+	reverse_proxy api:8000 {
+		# /jobs/{id}/events is Server-Sent Events. Caddy detects
+		# text/event-stream and stops buffering on its own, but an aggressive
+		# read timeout would still sever a quiet stream, so none is set here.
+		flush_interval -1
+	}
+}

@@ -1,0 +1,43 @@
+/* Vertically centred in what's left of the viewport under the page header,
+   not in the page box: the header is a fixed ~90px and the content column
+   has no height of its own, so `height: 100%` here would collapse to the
+   copy's own height and sit at the top. */
+.wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  min-height: min(56vh, 520px);
+  padding: var(--space-6) var(--space-4);
+  gap: var(--space-2);
+}
+
+.art {
+  /* The composition is a 600x600 square, so the box is one too. */
+  width: 200px;
+  height: 200px;
+  flex: 0 0 auto;
+}
+
+.title {
+  margin: 0;
+  font-size: 18px;
+  color: var(--color-text);
+}
+
+.body {
+  max-width: 52ch;
+  color: var(--color-text-muted);
+}
+
+.body p {
+  margin: var(--space-2) 0 0;
+}
+
+@media (max-width: 720px) {
+  .art {
+    width: 150px;
+    height: 150px;
+  }
+}

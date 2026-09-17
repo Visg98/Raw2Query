@@ -1,0 +1,144 @@
+.sidebar {
+  /* Own scroll context, pinned for the whole viewport: the nav stays put
+     while a long review or records table scrolls beside it. */
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: 100vh;
+  flex: 0 0 auto;
+  width: var(--sidenav-width);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-3);
+  background: var(--color-surface);
+  border-right: 1px solid var(--color-border);
+  transition: width 0.18s ease;
+  overflow: hidden;
+}
+
+.collapsed {
+  width: var(--sidenav-width-collapsed);
+  padding-left: var(--space-2);
+  padding-right: var(--space-2);
+  align-items: center;
+}
+
+.brandRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2) var(--space-4);
+}
+
+.collapsed .brandRow {
+  padding: var(--space-1) 0 var(--space-2);
+  justify-content: center;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border-radius: var(--radius-md);
+}
+
+.brand:hover {
+  text-decoration: none;
+}
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-muted);
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.toggle:hover {
+  background: var(--color-hover-bg);
+  border-color: var(--color-border);
+  color: var(--color-primary);
+}
+
+/* Collapsed there is no room beside the mark, so the control sits under
+   it instead of in the brand row. */
+.toggleStacked {
+  margin-bottom: var(--space-2);
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s;
+}
+
+.link:hover {
+  background: var(--color-hover-bg);
+  color: var(--color-text);
+  text-decoration: none;
+}
+
+/* Solid primary, white label: the page you are on should be the one thing
+   in the column you can find without reading it. The pale wash next door
+   belongs to hover, so the two are a difference of fill, not of shade. */
+.active {
+  background: var(--color-selected-bg);
+  color: var(--color-selected-text);
+  font-weight: 600;
+}
+
+/* Still hoverable — just a shade deeper, so pointing at the current page
+   doesn't look like leaving it. */
+.active:hover {
+  background: var(--color-selected-hover-bg);
+  color: var(--color-selected-text);
+}
+
+.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+}
+
+.label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.collapsed .link {
+  justify-content: center;
+  gap: 0;
+  padding: var(--space-2);
+  width: 40px;
+}
+
+/* Hidden rather than unmounted: the text stays in the accessibility tree
+   of the expanded nav and there's nothing to re-create on expand. */
+.collapsed .label {
+  display: none;
+}

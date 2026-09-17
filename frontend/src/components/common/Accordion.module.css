@@ -1,0 +1,47 @@
+.section {
+  margin-bottom: var(--space-4);
+  /* Not `overflow: hidden` — the topic chip input's typeahead dropdown
+     (TopicChipInput.module.css's .dropdown) is absolutely positioned and
+     needs to escape the accordion body, e.g. when the input sits near the
+     bottom of an open section. Hidden overflow clipped it down to a sliver,
+     making results/"+ Create" barely visible or unclickable. Nothing inside
+     an accordion currently needs corner-clipping — .header's background is
+     already transparent. */
+  overflow: visible;
+}
+
+.header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4) var(--space-5);
+  background: none;
+  border: none;
+  text-align: left;
+}
+
+.title {
+  font-size: 16px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.subtitle {
+  font-size: 12.5px;
+  margin-top: 2px;
+}
+
+.chevron {
+  font-size: 20px;
+  color: var(--color-text-muted);
+  line-height: 1;
+}
+
+.body {
+  padding: 0 var(--space-5) var(--space-5);
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-4);
+}

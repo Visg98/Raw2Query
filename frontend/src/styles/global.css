@@ -1,0 +1,173 @@
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+a {
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+}
+
+input, select, textarea {
+  font-family: inherit;
+  font-size: inherit;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-weight: 500;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--color-primary);
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: var(--color-primary-contrast);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--color-primary-hover);
+  border-color: var(--color-primary-hover);
+}
+
+.btn-danger {
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: var(--color-danger-bg);
+}
+
+.btn-sm {
+  padding: var(--space-1) var(--space-3);
+  font-size: 12px;
+}
+
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.field-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  margin-bottom: var(--space-1);
+}
+
+.text-input {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.text-input:focus {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -1px;
+}
+
+.btn:focus-visible,
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* The content column now sits beside the side nav rather than under a
+   full-width header, so it starts at the left edge of what's left instead
+   of being centred in it — centring would drift the page title away from
+   the nav as the window widens. */
+.page {
+  max-width: 1120px;
+  padding: var(--space-6) var(--space-6) var(--space-6);
+}
+
+.page-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+  flex-wrap: wrap;
+}
+
+.page-header h1 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.muted {
+  color: var(--color-text-muted);
+}
+
+.empty-state {
+  text-align: center;
+  padding: var(--space-6);
+  color: var(--color-text-muted);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-lg);
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--color-neutral-bg) 25%,
+    var(--color-surface) 37%,
+    var(--color-neutral-bg) 63%
+  );
+  background-size: 400% 100%;
+  animation: skeleton-loading 1.4s ease infinite;
+  border-radius: var(--radius-sm);
+}
+
+@keyframes skeleton-loading {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}

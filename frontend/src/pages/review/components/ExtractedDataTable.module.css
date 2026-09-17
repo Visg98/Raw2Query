@@ -1,0 +1,102 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* The table scrolls horizontally inside its own box rather than widening the
+   column. The review page's right-hand column is `minmax(0, 1fr)` precisely
+   so wide content can't push the layout off screen (see ReviewDetailPage),
+   and this table is exactly the wide content that would.
+     Scrolling is now the norm rather than the exception: every declared
+   field is a column here, not just the row-scoped ones, so even a four-field
+   schema overflows. Hence the affordance - a right-edge fade that shows there
+   is more table, because a clipped last column with no hint reads as a broken
+   layout rather than a scrollable one. The fade is attached to the scroll
+   box's own background so it disappears once scrolled to the end. */
+.scroll {
+  overflow-x: auto;
+  background:
+    linear-gradient(to left, var(--color-surface), rgb(255 255 255 / 0)) right / 24px 100% no-repeat,
+    linear-gradient(to left, rgb(0 0 0 / 0.08), rgb(255 255 255 / 0)) right / 6px 100% no-repeat;
+  background-attachment: local, scroll;
+  /* Room for the scrollbar so it never sits on top of the last row's input. */
+  padding-bottom: var(--space-1);
+}
+
+.table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.table th {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--color-text-muted);
+  font-weight: 600;
+  text-align: left;
+  /* A compromise, not a fit: every declared field is a column now, so a
+     four-field schema already exceeds the review column at any readable
+     width. 100px keeps an amount or a short code fully visible and lets a
+     long string truncate - which is why the cells stay real inputs (click to
+     see and edit the whole value) and why `.scroll` carries a fade. Going
+     wider pushed whole columns out of view, which is worse than clipping a
+     value inside one. */
+  min-width: 100px;
+  padding: 0 var(--space-2) var(--space-2);
+  vertical-align: bottom;
+}
+
+.table td {
+  padding: var(--space-1) var(--space-2);
+  vertical-align: top;
+}
+
+.indexHead {
+  min-width: 0;
+  width: 32px;
+}
+
+.removeCell {
+  padding-top: var(--space-2);
+}
+
+.remove {
+  padding: 0;
+  width: 24px;
+  line-height: 22px;
+  font-size: 15px;
+}
+
+.scopeBadge {
+  display: block;
+  margin-top: 2px;
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--color-primary);
+}
+
+.index {
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  text-align: right;
+  padding-top: var(--space-3);
+}
+
+/* A tint, not a border: it marks the cells that fill down as one value
+   without implying they are disabled — they are fully editable, and editing
+   one is the intended way to fix the document-level value. */
+.perDocumentCell {
+  background: var(--color-accent-soft);
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}

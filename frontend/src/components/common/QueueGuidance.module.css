@@ -1,0 +1,12 @@
+/* The top-of-page variant. A tinted rule rather than a card: it sits above
+   real cards holding real work, and a second card there would compete with
+   them for the same attention every time the page loads. */
+.compact {
+  margin: 0 0 var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-left: 3px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  background: var(--color-accent-soft);
+  color: var(--color-text);
+  font-size: 13px;
+}

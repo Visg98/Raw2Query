@@ -1,0 +1,52 @@
+# Public-VM overlay. Always used together with the base file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Differences from local dev: the API is not reachable from outside the host
+# (Caddy fronts it and terminates TLS), and every service has a memory ceiling
+# so one OCR job cannot take the whole 12GB box down with it.
+
+services:
+  db:
+    mem_limit: 1g
+
+  api:
+    # Bind to loopback only. Caddy reaches it over the compose network; nothing
+    # off the host can. Without the 127.0.0.1 prefix Docker would publish this
+    # on every interface and bypass the host firewall.
+    ports:
+      - "127.0.0.1:8000:8000"
+    mem_limit: 2g
+
+  worker:
+    # One replica, not two. With 2 OCPU total, torch and onnxruntime each try to
+    # use every core, so a second OCR worker makes throughput worse (cache
+    # thrash plus context switching) while doubling peak RAM. Peak is ~2.5-3GB
+    # on a hi-res multipage PDF, so 4g leaves room without inviting the OOM
+    # killer to pick a different victim.
+    mem_limit: 4g
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      # caddy_data holds the Let's Encrypt account key and issued certificates.
+      # Losing it means re-requesting a cert on every restart, and Let's
+      # Encrypt's duplicate-certificate limit (5/week) will then lock you out.
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      # Set both in .env on the VM. DEMO_TOKEN must match the frontend's
+      # VITE_DEMO_TOKEN that Netlify builds in.
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env, e.g. yourname.duckdns.org}
+      DEMO_TOKEN: ${DEMO_TOKEN:?set DEMO_TOKEN in .env}
+    depends_on:
+      - api
+
+volumes:
+  caddy_data:
+  caddy_config:

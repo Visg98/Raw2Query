@@ -1,0 +1,117 @@
+:root {
+  /* ── Brand palette ───────────────────────────────────────────────────
+     The five colours the whole application is built from. Nothing else
+     in the app should hard-code a hex for chrome, surfaces, text or
+     accents — use the semantic tokens below, which are these five plus
+     mixes of them. Changing a brand value here re-themes every screen.
+
+     --brand-primary    #005EFF  primary actions, links, active nav
+     --brand-canvas     #F7F8FA  the page behind the cards
+     --brand-white      #FFFFFF  cards, panels, side nav
+     --brand-highlight  #78C9F3  the highlight background — a selected
+                                 card, a celebrated panel, a picked row
+     --brand-ink        #312E81  body text only (see below)              */
+  --brand-primary: #005eff;
+  --brand-canvas: #f7f8fa;
+  --brand-white: #ffffff;
+  --brand-highlight: #78c9f3;
+  --brand-ink: #312e81;
+
+  /* ── Semantic tokens ─────────────────────────────────────────────────
+     Derived shades use color-mix so the four values above stay the only
+     place a brand colour is written down. */
+  --color-bg: var(--brand-canvas);
+  --color-surface: var(--brand-white);
+  --color-surface-alt: var(--brand-canvas);
+
+  /* The highlight at full strength, for the few places that are meant to
+     be unmistakably picked out: the selected schema-mode card, a
+     completion banner. */
+  --color-highlight: var(--brand-highlight);
+  /* And diluted, for the many places that only want a tint — nav hover,
+     a spanned table cell, the soft edge of a gradient. At full strength
+     those read as a selection the user didn't make. */
+  --color-accent-soft: color-mix(in srgb, var(--brand-highlight) 30%, var(--brand-white));
+
+  /* ── Selection ───────────────────────────────────────────────────────
+     A thing the user has picked — the current nav item, the chosen schema
+     card — is drawn as solid primary with white on top. The pale
+     highlight is reserved for *hover*, i.e. "you could pick this", so the
+     two states never have to be told apart by shade alone.
+
+     Explicitly not primary-on-highlight: mid-blue text on a pale blue
+     wash is low-contrast and reads as a disabled control rather than a
+     selected one. On hover, text stays --color-text for the same reason. */
+  --color-selected-bg: var(--brand-primary);
+  --color-selected-text: var(--brand-white);
+  /* Secondary copy inside a selected surface — dimmed towards the blue it
+     sits on, not towards grey, so it recedes without going muddy. */
+  --color-selected-text-muted: color-mix(in srgb, var(--brand-white) 82%, var(--brand-primary));
+  --color-selected-hover-bg: color-mix(in srgb, var(--brand-primary) 88%, #000000);
+  /* The hover wash: "available", one step short of selected. */
+  --color-hover-bg: var(--color-accent-soft);
+
+  --color-border: color-mix(in srgb, var(--brand-primary) 14%, var(--brand-white));
+  --color-border-strong: color-mix(in srgb, var(--brand-primary) 28%, var(--brand-white));
+
+  /* Body text is deliberately NOT derived from --brand-primary, and that
+     is the one exception to the palette rule above.
+
+     --brand-primary is a saturated mid-blue. Pushed 75% towards black it
+     stays a legibly *blue* blue (#0047BF), and a page whose every table
+     cell, filename and paragraph is drawn in it reads as a wall of links
+     rather than as text. --brand-ink is a deep indigo instead: pushed the
+     same 75% towards black it lands at a near-black (#252361) that carries
+     a trace of the brand without announcing it — which is what body copy
+     wants. Changing the primary re-themes the chrome; it must not restain
+     the prose. */
+  --color-text: color-mix(in srgb, var(--brand-ink) 75%, #000000);
+  /* 68% of that on white ≈ 5.1:1 against --color-surface — AA for body
+     text, and reads as a neutral grey rather than a tint. */
+  --color-text-muted: color-mix(in srgb, var(--color-text) 68%, var(--brand-white));
+
+  --color-primary: var(--brand-primary);
+  --color-primary-hover: color-mix(in srgb, var(--brand-primary) 82%, #000000);
+  --color-primary-contrast: var(--brand-white);
+  /* A ring that reads on both white and canvas without shouting. */
+  --color-focus-ring: color-mix(in srgb, var(--brand-primary) 35%, var(--brand-white));
+
+  /* Status hues stay outside the brand palette: red/amber/green carry
+     meaning that a blue tint would erase. */
+  --color-danger: #d1352b;
+  --color-danger-bg: #fdecec;
+  --color-warning: #b5750a;
+  --color-warning-bg: #fdf3dd;
+  --color-success: #157a4a;
+  --color-success-bg: #e6f6ee;
+  --color-neutral-bg: color-mix(in srgb, var(--brand-primary) 8%, var(--brand-canvas));
+  --color-info-bg: var(--color-accent-soft);
+  /* The blue equivalent of --color-warning / --color-success: a darkened
+     hue meant to be *read* on its own tinted background. --color-primary
+     itself is far too light for that — it is a fill colour, not an ink. */
+  --color-info-text: color-mix(in srgb, var(--brand-primary) 55%, #000000);
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 14px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+
+  /* Shadows carry a trace of the brand blue rather than flat black, so
+     cards lift off the canvas without looking sooty. */
+  --shadow-sm: 0 1px 2px color-mix(in srgb, var(--brand-primary) 10%, transparent);
+  --shadow-md: 0 4px 12px color-mix(in srgb, var(--brand-primary) 12%, transparent);
+
+  /* Side nav geometry — shared by the nav itself and the content column
+     it sits beside. */
+  --sidenav-width: 248px;
+  --sidenav-width-collapsed: 72px;
+}

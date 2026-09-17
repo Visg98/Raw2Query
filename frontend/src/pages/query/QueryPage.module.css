@@ -1,0 +1,50 @@
+.page {
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.main {
+  min-width: 0;
+  /* The conversation column keeps the old reading width; the sidebar is
+     extra chrome beside it, not a squeeze on the transcript. */
+  max-width: 760px;
+}
+
+.topicRow {
+  margin-bottom: var(--space-4);
+}
+
+.transcript {
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
+  min-height: 320px;
+  /* Scroll the transcript rather than the page so the composer stays
+     reachable in a long conversation. */
+  max-height: calc(100vh - 320px);
+  overflow-y: auto;
+  scroll-behavior: smooth;
+}
+
+.examples {
+  margin: 0;
+  padding-left: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: flex-start;
+  list-style: none;
+}
+
+/* One column below the sidebar's usable width — a 250px sidebar next to a
+   squeezed transcript is worse than stacking. */
+@media (max-width: 880px) {
+  .page {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .main {
+    max-width: none;
+  }
+}
