@@ -25,6 +25,7 @@ from app.schemas_pydantic import (
     DocumentDetailOut,
     DocumentOut,
     DocumentPreviewOut,
+    DocumentReextractResponse,
     DocumentUploadResult,
     PreviewElement,
     UploadResponse,
@@ -344,4 +345,70 @@ def delete_document(document_id: uuid.UUID, db: Session = Depends(get_db)) -> Do
         deleted_chunk_count=chunk_count,
         batch_deleted=batch_deleted,
         emptied_schema_id=emptied_schema_id,
+    )
+
+
+@router.post("/documents/{document_id}/reextract", response_model=DocumentReextractResponse)
+def reextract_document(document_id: uuid.UUID, db: Session = Depends(get_db)) -> DocumentReextractResponse:
+    """Re-runs extraction on an already-confirmed document.
+
+    `POST /jobs/{job_id}/reextract` only accepts a job that is still
+    `awaiting_review`, so once a document is confirmed - which is exactly
+    when it appears under a topic or a schema - there was no way to extract
+    it again short of deleting it and re-uploading.
+
+    This enqueues a `backfill` job, the same kind a breaking schema edit
+    uses. Only step 4 (structured extraction) re-runs, against the
+    document's current `schema_version_id`; schema matching, topic
+    suggestion and chunking are left alone, so re-extracting cannot
+    re-classify a document or duplicate its chunks. The job lands back in
+    `awaiting_review` for the reviewer, and confirming it *replaces* the
+    existing record rather than adding a second one
+    (`_apply_backfill_extracted_record` in app/pipeline/confirm.py).
+
+    Requires a schema: a backfill scores against a schema version, and
+    `run_backfill_pipeline` raises without one. A document that was
+    confirmed as an ad hoc shape that was never saved as a reusable schema
+    therefore has nothing to re-extract against, and gets a 400 saying so
+    rather than a failed job the user has to go and read.
+    """
+    document = db.get(Document, document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="document not found")
+
+    if document.schema_version_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "this document has no schema to re-extract against - it was confirmed as an ad hoc "
+                "shape that was never saved as a reusable schema. Delete it and upload it again to "
+                "run the full pipeline."
+            ),
+        )
+
+    # One re-extraction at a time. Without this, clicking twice queues two
+    # backfills for the same document; both would land in awaiting_review and
+    # confirming each in turn would apply, then re-apply, the same row.
+    active = (
+        db.query(Job.id)
+        .filter(Job.document_id == document.id, Job.status.in_(("pending", "extracting", "awaiting_review")))
+        .first()
+    )
+    if active is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="this document already has a job in progress or awaiting review",
+        )
+
+    job = Job(document_id=document.id, batch_id=document.batch_id, status="pending", kind="backfill")
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    logger.info("queued backfill job %s to re-extract document %s (%s)", job.id, document.id, document.filename)
+    return DocumentReextractResponse(
+        job_id=job.id,
+        document_id=document.id,
+        kind=job.kind,
+        schema_version_id=document.schema_version_id,
     )

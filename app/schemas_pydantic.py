@@ -350,6 +350,19 @@ class BatchDeleteResponse(BaseModel):
     batch_deleted: bool
 
 
+class DocumentReextractResponse(BaseModel):
+    """The review job queued for a re-extraction."""
+
+    job_id: uuid.UUID
+    document_id: uuid.UUID
+    # Always "backfill": only structured extraction re-runs, against the
+    # document's existing schema version.
+    kind: str
+    # The version the re-extraction will be scored against, so the caller can
+    # show which schema the new values will land in.
+    schema_version_id: uuid.UUID
+
+
 class DocumentDeleteResponse(BaseModel):
     """What a single-document purge removed.
 

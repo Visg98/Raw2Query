@@ -6,6 +6,7 @@ import { DataTable } from "../../components/common/DataTable";
 import { TrashIcon } from "../../components/common/Icon";
 import { useToast } from "../../components/common/Toast";
 import { DeleteDocumentButton } from "../../components/DeleteDocumentButton/DeleteDocumentButton";
+import { ReextractDocumentButton } from "../../components/ReextractDocumentButton/ReextractDocumentButton";
 import { RecordFilters } from "./components/RecordFilters";
 import { DeleteSchemaButton } from "./components/DeleteSchemaButton";
 
@@ -90,7 +91,7 @@ export function SchemaRecordsPage() {
               display: "inline-flex",
               justifyContent: "flex-end",
               gap: "var(--space-1)",
-              minWidth: 190,
+              minWidth: 230,
               whiteSpace: "nowrap",
             }}
           >
@@ -127,11 +128,18 @@ export function SchemaRecordsPage() {
                     document_id but no filename, so the dialog identifies the
                     document by a short id. */}
                 {row.document_id ? (
-                  <DeleteDocumentButton
-                    documentId={row.document_id}
-                    filename={`source document ${String(row.document_id).slice(0, 8)}`}
-                    label="Delete doc"
-                  />
+                  <>
+                    <ReextractDocumentButton
+                      documentId={row.document_id}
+                      filename={`source document ${String(row.document_id).slice(0, 8)}`}
+                      iconOnly
+                    />
+                    <DeleteDocumentButton
+                      documentId={row.document_id}
+                      filename={`source document ${String(row.document_id).slice(0, 8)}`}
+                      label="Delete doc"
+                    />
+                  </>
                 ) : null}
               </>
             )}
