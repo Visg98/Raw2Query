@@ -6,6 +6,8 @@ Messy documents in, structured & queryable data out.
   way, what was reversed, and what was deliberately cut. **Start here.**
 - [`plans.md`](plans.md) - the up-front design, as 23 numbered architecture decisions the
   code refers back to.
+- [`DEPLOY.md`](DEPLOY.md) - running this on a public VM: why the backend can't go anywhere
+  serverless, and the Compose/Caddy/Netlify setup that hosts it.
 
 - **API**: FastAPI (uploads, review/confirm, schema/topic CRUD, NL query, SSE progress)
 - **Worker**: a poll-loop process running the extraction pipeline (`unstructured` + `sentence-transformers` + Groq)

@@ -40,16 +40,38 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # the CUDA build. 2.14.0/0.29.0 is the matching pair, and both publish
 # cp311 aarch64 wheels on this channel (ARM is what Oracle's free tier offers).
 # sentence-transformers only requires torch>=2.2, so nothing upgrades it later.
+#
+# triton is uninstalled in this same layer, not a later one: Docker layers are
+# additive, so removing a file in a subsequent RUN leaves it in the image and
+# saves nothing. It is a 900MB GPU kernel compiler that torch declares as a
+# dependency and that only torch.compile's GPU codegen uses - this app just
+# calls SentenceTransformer.encode on CPU. Verified after removal: embeddings
+# still come back 384-dimensional and L2-normalised, and both
+# unstructured.partition.auto and app.api still import.
 RUN pip install --index-url https://download.pytorch.org/whl/cpu \
-    "torch==2.14.0+cpu" "torchvision==0.29.0+cpu"
+    "torch==2.14.0+cpu" "torchvision==0.29.0+cpu" \
+    && pip uninstall -y triton pytorch-triton 2>/dev/null || true
 
 COPY pyproject.toml ./
 COPY app ./app
 
-# --only-binary=:all: makes a missing ARM wheel fail fast with the package name
-# instead of dropping into a 30-60 minute source build (onnx, opencv and scipy
-# all use cmake) that would get OOM-killed on a 2-core instance.
-RUN pip install --only-binary=:all: .
+# Require pre-built wheels for the packages whose source builds are expensive:
+# onnx, opencv and scipy all use cmake and would take 30-60 minutes on a 2-core
+# instance, most likely ending in an OOM kill. Naming them makes a missing ARM
+# wheel fail immediately, with the package name, instead of stalling the build.
+#
+# This is a named list rather than `:all:` on purpose. `--only-binary=:all:`
+# makes resolution outright impossible here, because `unstructured` depends on
+# langdetect, which publishes no wheel at all - it is a ~1MB pure-Python sdist
+# that builds in seconds, so refusing it buys nothing. Verified against
+# aarch64: every package below has a manylinux ARM wheel for cp311.
+# The trailing uninstall is a second line of defence: if resolving the app's
+# dependencies re-adds triton to satisfy torch, this strips it from this layer
+# too.
+RUN pip install \
+    --only-binary=torch,torchvision,onnx,onnxruntime,opencv-python,opencv-python-headless,numpy,scipy,scikit-learn,lxml,pillow,pikepdf,tokenizers,safetensors,pandas \
+    . \
+    && pip uninstall -y triton pytorch-triton 2>/dev/null || true
 
 # Alembic needs these at runtime. They were previously absent from the image,
 # which meant `alembic upgrade head` could not run in a container at all - the
