@@ -48,3 +48,18 @@ export function getDocumentDownloadUrl(documentId) {
 export function getDocumentPreview(documentId) {
   return apiFetch(`/documents/${documentId}/preview`);
 }
+
+/**
+ * Erases one document and everything derived from it — its jobs, chunks and
+ * extracted records, confirmed or not — plus the uploaded original.
+ *
+ * Distinct from `deleteBatch`, which spares already-confirmed documents
+ * because their records are live queryable data. This one does not, so the
+ * caller must confirm with the user first.
+ *
+ * Resolves to `{ deleted_document_id, deleted_job_ids, deleted_record_count,
+ * deleted_chunk_count, batch_deleted, emptied_schema_id }`.
+ */
+export function deleteDocument(documentId) {
+  return apiFetch(`/documents/${documentId}`, { method: "DELETE" });
+}
