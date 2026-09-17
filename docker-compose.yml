@@ -65,8 +65,15 @@ services:
       <<: *backend-env
       READONLY_DATABASE_URL: postgresql+psycopg://raw2query_query_runner:${QUERY_RUNNER_DB_PASSWORD:-raw2query_query_runner}@db:5432/raw2query
       OMP_NUM_THREADS: "1"
-    ports:
-      - "8000:8000"
+    # No `ports` here on purpose. Compose MERGES port lists by appending rather
+    # than replacing, so publishing 8000 here and then narrowing it to
+    # 127.0.0.1 in docker-compose.prod.yml produced *two* bindings: Docker bound
+    # 0.0.0.0:8000 first, then failed the second with "address already in use",
+    # and the half-created container was left with no network attached.
+    # Instead: docker-compose.override.yml publishes it for local development
+    # (Compose loads that file automatically), and docker-compose.prod.yml binds
+    # it to loopback only. Passing explicit -f flags, as the VM does, skips the
+    # override file - so the public binding can never reach the deployment.
 
   worker:
     <<: *backend

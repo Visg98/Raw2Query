@@ -1,0 +1,14 @@
+# Local development only. Compose loads this automatically for a bare
+# `docker compose up`, and skips it whenever explicit -f flags are passed -
+# which is how the VM runs (see DEPLOY.md), so this public port binding cannot
+# leak into the deployment.
+#
+# This exists because Compose appends `ports` entries instead of overriding
+# them: publishing 8000 in docker-compose.yml and narrowing it to 127.0.0.1 in
+# docker-compose.prod.yml yields two conflicting bindings rather than one.
+
+services:
+  api:
+    # Reachable from the host at http://localhost:8000 for the Vite dev server.
+    ports:
+      - "8000:8000"
