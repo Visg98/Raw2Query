@@ -3,9 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { getJobReview } from "../../../api/jobs";
 import { StatusBadge } from "../../../components/common/StatusBadge";
 import { hasAnyLowConfidenceInAny } from "../../../components/common/ConfidenceFlag";
-import { DeleteDocumentButton } from "../../../components/DeleteDocumentButton/DeleteDocumentButton";
 
-export function ReviewQueueRow({ jobId, documentId, filename }) {
+export function ReviewQueueRow({ jobId, filename }) {
   const { data: review, isLoading } = useQuery({ queryKey: ["jobReview", jobId], queryFn: () => getJobReview(jobId) });
 
   const flagged = review
@@ -29,12 +28,6 @@ export function ReviewQueueRow({ jobId, documentId, filename }) {
       </td>
       <td>
         <Link to={`/review/${jobId}`}>Open →</Link>
-      </td>
-      {/* Per-document escape hatch. "Delete batch" above spares confirmed
-          documents, so without this a single unwanted document could not be
-          removed once confirmed. */}
-      <td style={{ textAlign: "right" }}>
-        {documentId ? <DeleteDocumentButton documentId={documentId} filename={filename} /> : null}
       </td>
     </tr>
   );

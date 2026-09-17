@@ -24,4 +24,9 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* Takes the slack so the status badge and the delete button stay together
+     on the right instead of the badge drifting to the middle of the row.
+     min-width: 0 lets the ellipsis actually kick in inside a flex item. */
+  flex: 1;
+  min-width: 0;
 }

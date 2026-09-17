@@ -50,9 +50,7 @@ export function BatchGroup({ batchId, documents }) {
         <tbody>
           {documents.map((doc) => {
             const jobId = jobByDocumentId.get(doc.id)?.id;
-            return jobId ? (
-              <ReviewQueueRow key={doc.id} jobId={jobId} documentId={doc.id} filename={doc.filename} />
-            ) : null;
+            return jobId ? <ReviewQueueRow key={doc.id} jobId={jobId} filename={doc.filename} /> : null;
           })}
         </tbody>
       </table>

@@ -5,6 +5,7 @@ import { deleteSchemaRecord, getSchemaRecords, listSchemaVersions, listSchemas }
 import { DataTable } from "../../components/common/DataTable";
 import { TrashIcon } from "../../components/common/Icon";
 import { useToast } from "../../components/common/Toast";
+import { DeleteDocumentButton } from "../../components/DeleteDocumentButton/DeleteDocumentButton";
 import { RecordFilters } from "./components/RecordFilters";
 import { DeleteSchemaButton } from "./components/DeleteSchemaButton";
 
@@ -89,7 +90,7 @@ export function SchemaRecordsPage() {
               display: "inline-flex",
               justifyContent: "flex-end",
               gap: "var(--space-1)",
-              minWidth: 132,
+              minWidth: 190,
               whiteSpace: "nowrap",
             }}
           >
@@ -108,15 +109,31 @@ export function SchemaRecordsPage() {
                 </button>
               </>
             ) : (
-              <button
-                type="button"
-                className="btn btn-sm btn-danger"
-                onClick={() => setPendingDeleteId(row.id)}
-                aria-label="Delete this row"
-                title="Delete this row"
-              >
-                <TrashIcon size={13} />
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-danger"
+                  onClick={() => setPendingDeleteId(row.id)}
+                  aria-label="Delete this row"
+                  title="Delete this row"
+                >
+                  <TrashIcon size={13} />
+                </button>
+                {/* Row-scoped schemas project several rows per document, so
+                    deleting one row can leave the rest of that document
+                    behind. This removes the source document entirely - every
+                    row it produced, its chunks and the uploaded file - which
+                    the row-level delete above cannot do. The view exposes
+                    document_id but no filename, so the dialog identifies the
+                    document by a short id. */}
+                {row.document_id ? (
+                  <DeleteDocumentButton
+                    documentId={row.document_id}
+                    filename={`source document ${String(row.document_id).slice(0, 8)}`}
+                    label="Delete doc"
+                  />
+                ) : null}
+              </>
             )}
           </span>
         ),

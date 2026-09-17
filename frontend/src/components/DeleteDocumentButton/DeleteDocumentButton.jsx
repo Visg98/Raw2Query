@@ -23,10 +23,13 @@ import { useToast } from "../common/Toast";
  * @param {string} [props.filename] - shown in the dialog so the user can see
  *   which document they picked.
  * @param {boolean} [props.iconOnly] - render just the icon, for dense rows.
+ * @param {string} [props.label] - button text; defaults to "Delete". Set it
+ *   where a plain "Delete" would be ambiguous, e.g. next to a row-level
+ *   delete on the schema records table.
  * @param {() => void} [props.onDeleted] - called after a successful delete,
  *   e.g. to navigate away from a detail page that no longer has a subject.
  */
-export function DeleteDocumentButton({ documentId, filename, iconOnly = false, onDeleted }) {
+export function DeleteDocumentButton({ documentId, filename, iconOnly = false, label, onDeleted }) {
   const [confirming, setConfirming] = useState(false);
   const queryClient = useQueryClient();
   const { showToast } = useToast();
@@ -53,12 +56,14 @@ export function DeleteDocumentButton({ documentId, filename, iconOnly = false, o
 
       setConfirming(false);
 
-      // Every surface that could still be rendering this document: the
-      // queues and lists read ["documents"], the review detail and viewer
-      // read ["document", id], and the schema record tables and topic counts
-      // change whenever extracted records go.
+      // Every surface that could still be rendering this document. ["records"]
+      // is invalidated by prefix rather than for one schema: the key is
+      // ["records", schemaId, page, filters], and a document's rows can span
+      // pages, so the whole family has to refetch - the row count drives the
+      // pager, and a stale total outlives the rows it was counting.
       queryClient.invalidateQueries({ queryKey: ["documents"] });
       queryClient.invalidateQueries({ queryKey: ["document", documentId] });
+      queryClient.invalidateQueries({ queryKey: ["records"] });
       queryClient.invalidateQueries({ queryKey: ["schemas"] });
       queryClient.invalidateQueries({ queryKey: ["topics"] });
       onDeleted?.();
@@ -76,7 +81,7 @@ export function DeleteDocumentButton({ documentId, filename, iconOnly = false, o
         aria-label={`Delete ${filename || "this document"}`}
       >
         <TrashIcon size={14} />
-        {iconOnly ? null : "Delete"}
+        {iconOnly ? null : label || "Delete"}
       </button>
 
       {confirming && (

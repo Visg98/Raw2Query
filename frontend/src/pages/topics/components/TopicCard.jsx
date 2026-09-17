@@ -7,6 +7,7 @@ import { StatusBadge } from "../../../components/common/StatusBadge";
 import { Modal } from "../../../components/common/Modal";
 import { TrashIcon } from "../../../components/common/Icon";
 import { useToast } from "../../../components/common/Toast";
+import { DeleteDocumentButton } from "../../../components/DeleteDocumentButton/DeleteDocumentButton";
 import styles from "./TopicCard.module.css";
 
 /** The fallback topic every untagged document lands on (decision #16). The
@@ -150,6 +151,9 @@ export function TopicCard({ topic }) {
                   <li key={doc.id}>
                     <span className={styles.filename}>{doc.filename}</span>
                     <StatusBadge status={doc.latest_job_status} />
+                    {/* Removing the topic (above) keeps the documents; this
+                        removes one document outright, records included. */}
+                    <DeleteDocumentButton documentId={doc.id} filename={doc.filename} iconOnly />
                   </li>
                 ))}
               </ul>
