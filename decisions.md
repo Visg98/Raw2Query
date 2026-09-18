@@ -47,489 +47,391 @@ This broader interpretation adds challenges around schema consistency and query 
 the prototype, I chose to explore those challenges while keeping the application single-user
 and making human confirmation part of the workflow.
 
----
+## Decisions
 
-## The hard part: the UI does not own its own state
+### Interpretation and scope
 
-Most CRUD frontends are easy because the user causes every state change. Click save, state
-changes, render. This app is not shaped like that. **The thing the user is waiting for happens
-in a separate worker process, minutes after they navigated away from the page that started
-it.** A document moves `pending → extracting → awaiting_review → confirmed` on its own
-schedule, across three different screens, and the user can refresh, navigate, open a second
-tab, or delete the whole batch at any point in the middle.
+**A reusable platform, not a single-document-type extractor.**
+*Alternatives:* build an invoice extractor (much stronger accuracy, demoable in a day); build
+a generic "PDF to JSON" endpoint with no schema concept at all.
+*Reasoning:* a domain-specific extractor answers the prompt but dodges its interesting
+question — who defines the structure. The generic endpoint dodges "queryable." The platform
+forces both.
+*Tradeoff accepted:* extraction accuracy on any *specific* document type is worse than a
+purpose-built extractor's. I decided the user-defined-schema story was worth that.
 
-So the interesting frontend problem here is not layout or component composition. It is
-**telling the truth about work you don't control** — and the specific trap is that the honest
-answer and the convenient answer look identical right up to the moment they diverge.
+**User-defined schemas, with inference as the fallback — not inference as the product.**
+*Alternatives:* infer a schema for every document and skip user-defined schemas entirely.
+*Reasoning:* pure inference guarantees inconsistency. Two invoices with different layouts
+infer different field names, and now `SUM(total)` can't find half the rows. The schema is
+what makes a *collection* queryable rather than a pile of individually-structured documents.
+Inference exists for the cold start, and its output is an *editable proposal* that can be
+promoted to a reusable named schema, which is how the cold start resolves itself.
 
-### The three-way ambiguity
+**Single-user, no auth, no tenancy.**
+*Reasoning:* tenant isolation means RLS, per-tenant vector scoping, and an injected filter on
+every generated SQL query — that last one interacts badly with NL-to-SQL, which is already
+the riskiest component. It is real work that proves nothing about the core pipeline.
+*Kept cheap to add later:* `documents` and `topics` are shaped so a `tenant_id` slots in
+without restructuring.
 
-Both queues are *filtered* lists: the extraction queue shows `pending`/`extracting`/`failed`,
-the review queue shows `awaiting_review`. That filtering is what makes "did my batch finish?"
-answerable at all — a batch whose work is done stops appearing. So the completion signal is
-**"present, then absent."**
+### Extraction and trust
 
-That signal is also produced by two other things that are not completion:
+**Nothing reaches the real tables until a human confirms.**
+*Alternatives:* write on extract and let users edit afterwards.
+*Reasoning:* this is the decision the whole trust story rests on. The pipeline writes its
+output to `jobs.result` and stops at `awaiting_review`; `extracted_records`, `document_topics`
+and `chunks` are only written by [`confirm.py`](app/pipeline/confirm.py), in one transaction.
+An LLM extraction is a *proposal*. If bad data can enter the queryable set unattended, every
+answer the system gives afterwards is suspect, and the user has no way to know which ones.
+*Tradeoff accepted:* real friction — a 50-file batch needs a human before it's queryable.
+Mitigated by "confirm all clean," which bulk-confirms only jobs where no field came back
+below the confidence threshold, so review effort concentrates where the model was unsure.
 
-| Batch is absent because… | What the user should see |
-| --- | --- |
-| Every document finished | Completion banner, then move them forward |
-| They deleted it | Nothing. The delete already reported itself |
-| The query hasn't loaded yet | Nothing. An empty list and a drained list are byte-identical |
+**Job status is persisted server-side; SSE is a view onto it, not the source of truth.**
+*Alternatives:* hold progress in the SSE stream only.
+*Reasoning:* a dropped connection or a page refresh would otherwise discard a completed
+extraction — the most expensive thing in the system. The client reloads and picks up from
+`awaiting_review`.
 
-Reading "absent" as "finished" is the obvious implementation, and it gets two of three cases
-wrong. Deleting a bad upload ended in **confetti and a redirect to review**, congratulating
-the user for finishing work they had just thrown away. And on every page load, the
-one-frame-empty list fired the celebration before any data arrived.
+**Identity-field dedup, because file-hash dedup solves the wrong problem.**
+*Reasoning:* two scans of the same invoice never hash the same, but they extract to the same
+`invoice_number` + `vendor`. Schemas optionally declare `identity_fields` as a natural key,
+and a match is surfaced on review with skip / keep both / replace. Keeping both cross-links
+via `is_duplicate_of`, so "we legitimately got billed twice" stays representable — a dedup
+design that can't express that is worse than none.
 
-[`useBatchCompletion`](frontend/src/hooks/useBatchCompletion.js) exists to disambiguate those
-three, and every part of it is load-bearing:
+**Confidence is per-field, not per-document.**
+*Reasoning:* a document where 11 of 12 fields are certain and the total is a guess is not "low
+confidence," it is one field that needs eyes. Per-field scores drive both the review
+highlighting and `is_job_clean`. Mechanically this is `data_confidence`: one score map per
+extracted object, positionally parallel to `extracted_data`, so a score is addressed per
+*cell* of the review table. There is deliberately one confidence source rather than a document
+dict plus a row list — `is_job_clean` reading only one of two was the bug that reported a
+40-line invoice as clean on the strength of its header.
 
-- **`ready`** — the caller passes `!isLoading`. A loading queue and a drained queue are
-  indistinguishable from inside the hook, so it refuses to act until the distinction exists.
-- **`markBatchDiscarded`** — the delete mutation is the *only* caller that knows a
-  disappearance was deliberate, so it is the one that has to say so. It writes the batch id to
-  a shared `sessionStorage` key **before** invalidating the queries that drop the rows,
-  because the invalidation is what triggers the hook.
-- **One discard key for both queues** — a delete in either is a delete everywhere, and both
-  have to stay quiet. The *watched-batch* markers are per-queue (`storageKey`), because the
-  two queues watch the same batches independently and must not clear each other's marker.
-- **Watch the newest batch only** — that's the one the user just acted on. Celebrating an
-  older batch that happened to drain first would navigate someone away mid-task.
-- **Key on the watched batch being gone, not on the queue being empty** — a failed document
-  *keeps* its row, so an older batch with a failure sits in the queue forever and would mask
-  the newest batch draining. The upload the user is actually waiting on would finish in
-  silence.
-- **A failed extraction cannot celebrate, structurally.** Because a `failed` row keeps the
-  batch in the list, "present, then absent" is *false* for the case that must never fire. That
-  is why it's the right test rather than a convenient one — the safety property falls out of
-  the signal instead of needing a separate guard.
+**Long documents reuse the RAG chunker rather than a second splitter.**
+*Reasoning:* over `MAX_EXTRACT_CHARS`, extraction falls back to running per-chunk with
+`chunk_by_title` — the same section-aware splitter used for embedding — then merges
+field-by-field. Where two chunks disagree on a field, it keeps the later value but **records
+the lower of the two confidences**, so a genuine conflict surfaces as something to look at
+rather than a silent last-write-wins.
+*Do not flatten before this merge.* It runs on the unflattened document/rows shape and the two
+halves merge by opposite rules — document fields reconcile, rows concatenate. A flat list
+cannot tell "this chunk's copy of the vendor" from "a row", so concatenating would add one
+junk object per prose chunk and reconciling would collapse a 40-line invoice into its last
+line. `flatten_extraction` runs once, afterwards.
 
-### Why `sessionStorage`, not a ref
+**One document can produce many rows, and the header is denormalized onto every one of
+them.**
+*Alternatives:* a normalized parent/child pair (header view + line-item view joined on
+`document_id`); one record per document holding a JSONB array of rows, unnested in the view
+body.
+*Reasoning:* a schema field now declares a `scope` — `document` for "Invoice Number",
+`row` for "Line Amount" — and a document with row-scoped fields confirms to N
+`extracted_records` rows, ordered by `row_index`. `extract.flatten_extraction` copies the
+document-level values onto each row, so `view_<schema>` stays **one flat relation**. That is
+the load-bearing part: `build_catalog` advertises no relationships between views, so generated
+SQL has no join key available, and the normalized design would have made
+`SUM(line_amount) GROUP BY vendor` — the exact question this feature exists to answer —
+depend on the model inventing a join. Trading a solved problem for an unsolved one is the
+wrong trade; repeating a vendor name across twelve rows costs nothing. The JSONB-array variant
+keeps the record count at one but puts a second way to read a field into the view generator,
+and `_find_dedup_match` has to agree with that generator about which JSON key holds a value or
+the two disagree about what a record *is*.
+*Tradeoff accepted:* a document-level value summed across rows multiply-counts; the SQL prompt
+says so explicitly for multi-row views only, which is a request, not the guarantee that the
+`sql_guard` rails are. Identity fields are constrained to document scope (a 400 otherwise),
+since identity means "same document" and dedup runs once per document. And a schema with no
+row-scoped field keeps its exact prior behaviour — same response schema, same prompt, one
+record — so nothing that never opts in can regress.
 
-This is the part I'd want to be asked about. A `useRef` only remembers what *this component
-instance* has seen — and **the review queue is remounted by the very action it needs to react
-to.** Confirming the last document in a batch navigates from `/review/:jobId` back to
-`/review`, so the page mounts fresh into an already-empty queue with nothing to compare
-against. The signal is destroyed by the event that produces it.
+**The staged extraction payload is a flat list of objects.**
+*Alternatives:* keep `job.result` split into an `extracted_data` dict plus a sibling
+`extracted_rows` list, and flatten at confirm time; flatten only in the review API's
+serializer, leaving storage split.
+*Reasoning:* the review screen is a table and the confirm target is N flat records, so the
+split shape served neither end — it existed only to give one editing property (below). Having
+two shapes for one concept meant every consumer had to know both: `is_job_clean` read two
+differently-shaped confidence sources, the PATCH merge had two branches with different
+invalidation rules, and the review screen rendered two unrelated widgets over what is one
+table. `extract.flatten_extraction` now produces `extracted_data: list[dict]` — one object per
+value-set, each carrying every declared field — and `materialize_record_data` reduces to a
+coercion pass. Flattening in the serializer only would have left the same two shapes in the
+database with a third view on top.
+*Tradeoff accepted:* the payload is now redundant, so "edit a document-level value once and it
+applies to every row" is no longer structural. The review table restores it by filling a
+`scope != "row"` column down on edit, which puts the property where the reviewer's intent
+is — but a client PATCHing the API directly can now store objects that disagree on a
+document-level field, which the split shape made impossible. `_identity_values` logs such a
+disagreement rather than rejecting it; enforcing it would mean teaching the flat payload about
+scopes again. Two guards keep the row count honest: `flatten_extraction` returns `[]` only for
+an empty field list (never for "no rows found"), and `materialize_record_data` turns `[]` back
+into `[{}]`, because a document that silently stops producing a record disappears from its view
+and resurfaces only as a wrong `SUM`.
 
-The watched id therefore has to outlive the mount. `sessionStorage` rather than `localStorage`
-because it should be per-tab and per-session: a batch that finished last week is not news on a
-fresh visit. Every read and write is wrapped — blocked storage in private mode degrades the
-hook to "only notices a batch finishing while you were looking at it," which is the common
-case anyway, rather than throwing. The discard list is capped at 20 entries, since only
-recent ids can still be in a marker slot.
+**A bad extraction is re-run with feedback, in place, on the same job.**
+*Alternatives:* enqueue a second job for the document; make the reviewer hand-correct the
+table; reject and re-upload.
+*Reasoning:* a misread column is one sentence to describe and expensive to fix cell by cell,
+so `POST /jobs/{id}/reextract` takes the reviewer's correction, appends it to the extraction
+prompt (after the structural rules, never before — a correction phrased as an instruction is
+exactly the text that would talk the model out of "do not repeat the document-level values
+inside the rows") and re-runs step 4. A second job would list the same document twice in the
+review queue, strand this job's draft, and stale the review URL. Only the table is rebuilt:
+chunks are deterministic from the same file, so re-chunking would spend the embedding cost —
+the one cost that scales with corpus size — to produce identical rows, and the topics, dedup
+match and schema choice are either unchanged or were made by the reviewer since. Fields are
+resolved from `job.result`, **not** `document.schema_version` as backfill does, because the
+reviewer may have re-pointed the job at another schema via the review screen and that choice
+lives only in the staged payload until confirm.
+*Tradeoff accepted:* re-extracting discards the reviewer's own cell edits, including a saved
+draft. Interleaving a fresh read with edits made against the previous one would produce a
+table matching neither, so the UI confirms first rather than merging. The feedback is
+untrusted text in a prompt, left unsanitized beyond delimiting: its blast radius is one
+extraction that the same person then reviews field by field before it can be confirmed.
 
-*Tradeoff accepted:* the mechanism is inference over a filtered list, not a server event. A
-`batch_completed` webhook or a status field on the batch would be unambiguous and is the right
-answer at scale. I chose inference because it needed no new backend surface and no second
-source of truth about what "done" means — the queue's own contents already define it — but it
-means the hook is coupled to the queues staying filtered, which is a real constraint a future
-change could break silently.
+**Backfill replaces a document's record set rather than updating it in place.**
+*Reasoning:* the in-place version located the row with `.first()`, which is structurally blind
+to row count — re-extracting a 12-line invoice as 9 lines would update one row and leave 11
+stale ones behind. `regenerate_schema_view` casts every row to the *newest* field type, so a
+single stale row whose value only parsed under the old type nulls out a cell for every reader,
+which is exactly the breakage in-place updating existed to prevent. Delete-then-insert keeps
+that guarantee at any row count.
+*Tradeoff accepted:* record ids don't survive a backfill. Nothing references them except
+`is_duplicate_of`, which is detached first — losing a "these two are duplicates" note about a
+row being deleted is better than a `ForeignKeyViolation` that fails the confirm.
 
----
+### Query
 
-## Frontend decisions
+**A routing layer, not one query mechanism.**
+*Alternatives:* RAG only (simplest, and what most implementations ship); SQL only.
+*Reasoning:* RAG-only cannot reliably answer *"total invoiced amount by supplier"* — summing
+across documents is exactly what retrieval-and-summarize is worst at, and it will confidently
+return a wrong number. SQL-only cannot answer *"what does this agreement say about
+cancellation?"* The two question types are both native to this product, so the router is not
+optional. Structured questions get SQL over the typed views; contextual ones get hybrid
+retrieval.
 
-### Architecture and the data layer
+**Two independent safety rails on generated SQL.**
+*Reasoning:* I assumed from the start that the model would eventually emit something
+destructive, so neither rail trusts the prompt.
+- *Parser rail:* `sqlglot` parses the SQL and rejects anything that isn't exactly one pure
+  `SELECT`. Write and DDL node types are checked **anywhere in the tree**, not just at the
+  top level, because `WITH x AS (DELETE ... RETURNING *) SELECT * FROM x` parses as a
+  top-level `Select`. Table references are checked against the allowed view list.
+- *Database rail:* execution goes through a separate Postgres role holding `SELECT` on the
+  `view_*` views and nothing else. If the parser check is ever wrong, the database still
+  refuses.
 
-**Server state and client state are strictly separated. `react-query` owns everything
-server-shaped; `useState`/`useReducer` owns the rest. No global store.**
-*Alternatives:* Redux or Zustand for a single app-wide store; lifting server data into context.
-*Reasoning:* almost every piece of state in this app is a cached copy of something the server
-owns, and the hard parts are staleness, refetch timing and invalidation — exactly what
-react-query is for and what a hand-rolled store makes you reimplement badly. What's left that
-is genuinely client-owned is small and local: a review draft, a dropdown's open state, the
-topic filter on the Ask page. None of it needs to be global, so a store would add a layer that
-only forwards. The cache *is* the shared state, and the query key is the contract.
-*Consequence:* invalidation is the thing to get right, and it's explicit at every mutation
-site. `DeleteBatchButton` invalidates both `["documents"]` **and** `["batch", batchId]` —
-missing the second left the group's rows rendering live status from a poll for a batch that no
-longer existed.
+*Redundant on purpose, same reasoning as the cast layers.* A rejected query is never shown or
+executed — it logs and hands the question to RAG.
 
-**Six runtime dependencies, no component library, no CSS framework.**
-`react`, `react-dom`, `react-router-dom`, `@tanstack/react-query`, `lottie-react`,
-`react-syntax-highlighter`.
-*Reasoning:* the components this app needs most — an editable extraction table with per-cell
-confidence, a chip input with inline create, a preview pane that dispatches on server-decided
-renderer — are not in any component library. I'd have imported MUI for the generic 20% and
-fought it for the specific 80%. Styling is CSS Modules over design tokens in
-[`tokens.css`](frontend/src/styles/tokens.css), which gives scoped class names with no runtime
-and no build plugin.
-*Tradeoff accepted:* I wrote my own `Modal`, `Toast`, `Accordion`, `DataTable` and
-`EmptyState`. They're small, but they're also less accessible than a mature library's — the
-modal doesn't trap focus, which is a real gap I'd close before shipping this to users.
+**Chunk and embed every document unconditionally.**
+*Reasoning:* even fully-structured documents get chunked, and schema-extracted values are
+*not* excluded from the chunk stream. Deliberate redundancy: the structured field answers the
+question the schema anticipated, the chunk answers the one it didn't.
 
-**One API module per resource, and the fetch wrapper is the only place that knows about HTTP.**
-*Reasoning:* [`api/client.js`](frontend/src/api/client.js) handles base URL, params, JSON vs.
-multipart, and error normalization; `api/jobs.js`, `api/topics.js` and the rest expose plain
-async functions. No component constructs a URL or reads `res.status`. That boundary is also
-where the camelCase↔snake_case translation lives: `patchJobReview` maps the UI's
-`topicIds`/`newTopicNames` onto the API's read shape, so the rest of the frontend never has to
-know that the review payload's read and write field names differ.
+**Hybrid retrieval, vector plus full-text.**
+*Reasoning:* embeddings are poor at exact tokens — invoice numbers, reference codes, proper
+nouns — which is a large share of what someone actually searches a document collection for.
+`pgvector` cosine similarity is blended 0.6/0.4 with Postgres `ts_rank` in one SQL statement.
+*Tradeoff accepted:* the weights are a judgment call, not a tuned result.
 
-**Normalized API errors, because FastAPI's error body has two shapes.**
-*Reasoning:* `detail` is a string for a hand-raised `HTTPException` and a **list** of
-`{loc, msg, type}` objects for a 422 validation failure. Passing that list to `new Error()`
-stringifies it as `"[object Object]"` — so every validation error in the app rendered as
-`[object Object]` in a toast. `formatErrorDetail` renders both shapes as readable text and
-flattens `loc` into a field path, so a 422 now says `name: field required` in the place the
-user is looking. Error *messages* are a UI surface; they deserve the same attention as a
-component.
+**Source cards name the document and page.**
+*Reasoning:* a citation labelled with a bare UUID tells the reader nothing about what they are
+being shown, which defeats the purpose of citing. `filename` and `page_number` are joined into
+the retrieval query itself.
 
-**Feature-folder colocation, with a shared `components/common`.**
-`pages/review/ReviewDetailPage.jsx` sits next to `pages/review/components/*`. A component is
-promoted to `components/` only when a second feature actually needs it — which is how
-`TopicChipInput`, `DocumentViewer`, `FileDropzone` and `DeleteBatchButton` got there, each
-with a genuine second call site.
-*Reasoning:* the alternative — one flat `components/` directory — makes it impossible to tell
-what is shared from what is incidentally reused, and every shared component becomes something
-you have to check all call sites before touching. Promotion-on-second-use keeps that cost
-proportional.
+**The scope predicate is injected, not requested.**
+*Reasoning:* topic scoping used to be a sentence in the SQL-generation prompt carrying a literal
+`document_id IN (...)` list. The model could omit it, and when it did the aggregate was computed
+over the whole corpus while the answer stated the figure as fact and the page reported "searched
+within 1 topic(s)" beside it — the only failure mode in the system where the UI actively
+corroborates a wrong number. `sql_guard.inject_scope` now rewrites the scope into the parsed
+statement. Same argument as the qualifier repair one section up: *prompt instructions are a
+request; the normalizer is a guarantee.*
 
-### Representing work in flight
+**A view reference becomes a scoped derived table, not an extra WHERE clause.**
+*Reasoning:* appending `AND alias.topic_ids && …` to the containing `SELECT` is the obvious move
+and it is wrong in the cases that matter. An unaliased reference cannot be qualified without
+inventing an alias, which breaks any `view_invoice.total` the model already wrote; and a
+reference inside a `JOIN ... ON` or a correlated subquery makes "which WHERE clause" ambiguous.
+Rewriting the table node into `(SELECT * FROM view_x WHERE …) AS <original alias>` is
+unambiguous everywhere, and an unaliased reference keeps its own name so qualified references
+still resolve. *Consequence:* the rewrite is not idempotent — it must be a single pass, and
+`normalize_sql` must never see its own output.
 
-**SSE below four documents per batch, polling above it.**
-*Alternatives:* SSE for everything; polling for everything.
-*Reasoning:* SSE gives a genuinely live progress bar per document, and one `EventSource` per
-row is fine for the small batch a user is watching. It stops being fine quickly — browsers cap
-concurrent connections per origin at around six, so a 20-file batch opening 20 streams
-exhausts the pool and starves *the app's own API calls*, including the ones that would tell the
-user anything is wrong. Above the threshold, [`useBatchPolling`](frontend/src/hooks/useBatchPolling.js)
-polls `GET /batches/{id}` — **one request covering every job in the batch** — and stops
-polling entirely once no job is in flight (`refetchInterval` returning `false`).
-*Consequence:* [`UploadProgressPage`](frontend/src/pages/upload/UploadProgressPage.jsx) renders
-two row components, `JobProgressRowLive` and `JobProgressRowStatic`, against one visual design.
-The duplication is deliberate: the alternative is one component with a mode flag branching on
-its own data source, which hides the connection-count decision inside a leaf.
+**Generated SQL is scope-free, so the retry ladder is free.**
+*Reasoning:* once scope left the prompt, `generate_sql` no longer depends on it, so it hoists out
+of the scoped→unscoped candidate loop. The relaxation retry is now the same statement under a
+different scope instead of a second, unrelated LLM roll — one fewer call on that path, and a
+deterministic retry.
 
-**`useJobEvents` seeds from a fetch, then streams — and keeps a fallback poll.**
-*Reasoning:* the SSE stream carries deltas, not history, so a page refreshed mid-extraction
-would show nothing until the next progress tick. Seeding from `GET /jobs/{id}` first makes
-refresh work. A 2s fallback poll runs alongside, because an `EventSource` that dies without a
-clean close otherwise leaves the UI frozen on a stale status forever. Whichever source reports
-a terminal status first tears down both. `awaiting_review` counts as terminal for the stream:
-past that point, state only changes by explicit user action, so there is nothing to stream.
+**A field's column is persisted, never derived.**
+*Reasoning:* the field-name→column mapping was computed inside the view generator and stored
+nowhere, so every other consumer re-derived it and two of them derived it wrong: both the
+NL-to-SQL catalog and the records grid advertised the raw field name while the column was
+`safe_ident(name)`. A field called "Invoice Total" was offered to the model as a column that did
+not exist, so the query failed and fell back to RAG — silently, because the fallback was
+working as designed. Field names with spaces and capitals are the normal case, so this was
+likely a large share of why structured questions underperformed.
+*What I hadn't appreciated:* it was three collision bugs, not one. A field named `id` collided
+with the view's own `er.id` and made `CREATE VIEW` fail outright. `safe_ident` never truncated
+but Postgres truncates identifiers at 63 characters, so two long names sharing a prefix collided
+*after* truncation — which the dedup loop structurally could not see, because it deduped the
+untruncated strings. And the `_` disambiguation suffix depended on dict iteration order across
+versions, so it wasn't reproducible outside the one loop that produced it. A 10-character
+`f_[0-9a-f]{8}` key removes all three by construction rather than by care.
+*Tradeoff accepted:* opaque columns strip the semantic signal a model uses to pick a column. Paid
+for by giving the catalog the human label *and* the description (which was already stored and
+previously discarded), and by keeping the routing call on human names — handing that one a list
+of hex tokens would push every structured question to RAG, a worse failure than the one being
+fixed.
 
-**A standing `/queue` page, not just a per-batch progress URL.**
-*Reasoning:* `/upload/:batchId/progress` only exists for the batch you just uploaded. Close
-that tab and the work is invisible — still running, but unreachable. The
-[extraction queue](frontend/src/pages/processing/ProcessingQueuePage.jsx) re-derives every
-in-flight and failed document from scratch on each load, batch and all, so there is nothing
-to lose track of. The review queue then carries an
-[`InProgressList`](frontend/src/pages/review/components/InProgressList.jsx) pointer, because
-the review queue lists *only* `awaiting_review` — landing there while something is still
-extracting would otherwise look like the document vanished.
+**The column lookup is scoped by the row's own version.**
+*Reasoning:* a stable key plus a changing name means the view has to know which JSON key holds a
+given field's value for a given row. `COALESCE(data->>'new', data->>'old')` looks like the
+answer and leaks: extraction writes every declared field, using an explicit JSON null when the
+value is absent, and `->>` cannot distinguish a JSON null from a missing key — so COALESCE falls
+through and surfaces a *different* field's value whenever a later version reuses a retired name.
+Branching on `er.schema_version_id` reads a persisted fact instead of inferring one from the
+payload shape. The obvious optimisation ("only one historical name, so read it directly") is
+unsound in the mirror-image way, so the plain form is only used for a field whose name is
+unique to it in both directions and declared by every version.
 
-**A bookmarked progress URL still polls.**
-When the router-state handoff from `POST /documents` isn't available — a reopened or bookmarked
-progress link — the page falls back to `GET /batches/{id}`. That query fetched **once** and
-then sat frozen on whatever status the jobs happened to have, forever, looking like extraction
-was stuck. It also fed `allTerminal`, so the same freeze removed the link forward to review.
-The fallback query now carries the same `refetchInterval` as the primary path.
+### Infrastructure
 
-**Router state as a handoff, with the fetch as the fallback.**
-*Reasoning:* `POST /documents` already returns the batch id and every document's job id, so
-passing that through `navigate(..., { state })` renders the progress rows with no round trip —
-the user sees their filenames the instant the upload completes. But router state is gone on
-reload, so the same screen has to work without it. Handoff for speed, fetch for correctness.
+**One Postgres instance does four jobs: relational store, job queue, vector index, full-text
+index.**
+*Alternatives:* Redis + Celery for the queue; Pinecone/Qdrant/Chroma for vectors;
+Elasticsearch for text.
+*Reasoning:* the honest version is that a separate broker and a separate vector DB would each
+buy me something I don't need at this scale, and cost me something I do need — a setup a
+stranger can run in one shot, and one transaction boundary. The queue is a `jobs` table
+claimed with `SELECT ... FOR UPDATE SKIP LOCKED`, the standard pattern for multiple competing
+consumers. Vectors are `pgvector` in the same database, which turns topic-scoped search into a
+plain `WHERE topic_ids && ...` instead of a vector-DB metadata filter plus a relational join.
+*Tradeoff accepted:* polling costs a little latency versus a push broker, and `pgvector` will
+be outperformed by a dedicated store at millions of vectors. Neither binds here.
 
-### The review screen
+**One physical store per schema lineage, with a generated view — not a table per version.**
+*Alternatives:* a new physical table per schema version (the original plan, rejected before
+implementation).
+*Reasoning:* table-per-version means *"total spend across all invoices"* has to know to
+`UNION` every historical version's table. That is a query-time tax that grows every time
+someone edits a schema. Instead, records are JSONB with a `(schema_id, version)` stamp, and
+`view_<schema>` flattens the union of every version's field set — old records simply read
+`NULL` for columns added later. Cross-version queryability becomes free rather than
+conditional.
+*Consequence I had to handle:* the view is `DROP`/`CREATE`, not `CREATE OR REPLACE`, because
+retyping a field changes a column's output type and Postgres refuses that under `REPLACE`.
+The read-only role's grant survives, since `ALTER DEFAULT PRIVILEGES` keys to the creating
+role rather than the object's creation time.
 
-This is the product's centre — the one screen where a human either catches a bad extraction or
-lets it into the dataset — and [it](frontend/src/pages/review/ReviewDetailPage.jsx) carries
-most of the frontend's difficulty.
+**Breaking schema edits ask; additive edits don't.**
+*Reasoning:* adding an optional field can't invalidate existing data, so prompting for it is
+noise. Removing, retyping, or redefining a field can, so the user chooses: background backfill
+(re-extract everything under the new version) or forward-only (old records keep their data,
+new documents use the new version). The prompt decides *whether a job runs* — never which
+table a record lands in.
 
-**Draft state in a `useReducer`, seeded once per *extraction run*, not once per mount.**
-*Alternatives:* seed on mount; treat the server payload as the single source and PATCH on every
-keystroke.
-*Reasoning:* the reviewer is editing a draft that the server also rewrites underneath them —
-every PATCH writes its response back into the cache, and a re-extract replaces the whole table.
-Seeding on "payload changed" would discard their in-progress edits on every save. Seeding on
-mount would never pick up a re-extract. So the seed is keyed on
-`review.result.reextract_history.length` — the count of extraction runs. An ordinary refetch
-leaves edits alone; a completed re-extract bumps the count past `seededRun` and re-seeds the
-table. A reducer rather than eight `useState`s because the fields interact: choosing a matched
-schema has to clear `proposedSchemaFields` and `saveSchemaAs` in the same transition, and that
-rule belongs in one place.
+**Local embeddings (`bge-small-en-v1.5`) over an embedding API.**
+*Reasoning:* embedding runs on every chunk of every document, so it is the one LLM-adjacent
+cost that scales with corpus size rather than with user activity. Local means no per-chunk
+cost, no rate limit on ingest, and the app still works with no network. Retrieval quality at
+that size is strong enough that the tradeoff isn't close.
+*Cost accepted:* a heavy install, and the worker image carries OCR system packages the API
+image doesn't need — which is why they are separate Dockerfiles.
 
-**Per-document columns fill down when edited.**
-*Reasoning:* the staged payload is redundant by design — a document's header values are copied
-onto every row, so the table shows exactly what Confirm will store. But a reviewer fixing a
-misread vendor name means *"the document says this"*, not *"row 3 says this"*, and must not
-retype it once per line item. Editing any cell of a `scope !== "row"` column writes it to every
-object. Adding a row copies the per-document values from the first row rather than leaving them
-blank, since a blank would confirm as a null.
-*The direction of the default matters:* filling a column down is the destructive move, so it
-requires an *explicit* `scope` declaration. An ad hoc column the model proposed has no scope
-and stays cell-local — the backend defaults a missing scope to `document`, and the UI
-deliberately defaults it the other way, because guessing wrong in the backend costs a label and
-guessing wrong here overwrites twelve cells the reviewer didn't touch.
-
-**Columns are the declared field list *plus* anything the payload actually carries.**
-*Reasoning:* a field the model found nothing for has no key in `extracted_data`, so
-data-derived columns would hide it — and the reviewer would never get the chance to fill it in.
-Conversely, a schema edited between extraction and review has fields the payload doesn't match,
-and dropping those columns would **silently confirm values the reviewer never saw**. So
-declared columns come first, in schema order, and undeclared-but-present keys are appended
-rather than discarded. Showing a column that shouldn't be there is a visible oddity; hiding one
-is invisible data loss.
-
-**Seeding is guarded on type, not on shape.**
-`job.result` is an untyped JSON blob any client can PATCH. `Array.isArray(result.extracted_data)
-? … : []` — because a non-array there takes the column derivation (`.flatMap` over rows)
-straight to a `TypeError` and blanks the entire page. The review screen is the one place a
-malformed payload must not become a white screen, since it's where you'd go to fix it.
-
-**Confidence flags sit above the input, per cell.**
-*Reasoning:* confidence is per cell, not per column — a header-column flag would either
-aggregate away the one bad row or mark the whole column suspect. Putting the flag in the cell
-puts the reviewer's attention exactly where the model was unsure.
-
-**Re-extract is in-place, with its own live status.**
-*Reasoning:* a misread column is one sentence to describe and expensive to fix cell by cell, so
-the reviewer can send feedback and re-run. That puts the job back through the worker, so the
-page has to watch it the way the queue does — but `useJobEvents` is enabled *only* for the
-duration of a run, since the stream closes at terminal status and flipping the flag back on is
-what re-arms it for the next one. A failed re-extract says so and leaves the previous table
-untouched; the destructive part (discarding the reviewer's cell edits) is confirmed before the
-run rather than merged after, because interleaving a fresh read with edits made against the
-previous one produces a table matching neither.
-
-**`minmax(0, 1fr)`, not `1fr`.**
-A grid track's implicit `min-width: auto` lets wide content force its column past its share.
-A spreadsheet preview's table did exactly that, pushing the extracted-data column off the right
-edge of the screen. Worth writing down because it looks like a typo and is the difference
-between a usable review screen and an unusable one.
-
-### Telling the user the truth
-
-A theme rather than a single decision, and the frontend counterpart to the backend's "a
-fallback path needs to be loud."
-
-**The toast reports what the server did, not what was asked.** Deleting a batch whose documents
-are all already confirmed deletes nothing — the backend keeps confirmed records. The UI reads
-`deleted_document_ids` and `kept_document_ids` off the response and says *"Nothing deleted — all
-3 documents in this batch are already confirmed"* rather than a blanket "Deleted." Reporting
-success for a no-op is a lie the user only catches by reloading.
-
-**The confirm dialog hedges the count it isn't sure about.** The queue can only see its own
-filtered subset of a batch, so the dialog says what it knows ("removes N documents from the
-queue") and states the rule separately ("documents you've already confirmed are kept"), instead
-of asserting a total it can't compute.
-
-**Destructive actions are behind a dialog when they're genuinely irreversible.** Batch delete
-unlinks the originals from disk, so it's the one queue action nothing can undo — dialog. Confirm
-and reject are not, so they aren't gated.
-
-**The answer shows which branch produced it.** The Ask page renders `routing_used` and, for the
-SQL branch, the statement that actually ran post-repair. The user can tell whether a number came
-from a query over their records or from summarized prose — which is the difference between a
-figure they can act on and one they should check.
-
-**Empty states and full-queue guidance are the same component.**
-[`QueueGuidance`](frontend/src/components/common/QueueGuidance.jsx) renders one line at the top
-of a busy queue and the full copy inside the empty state.
-*Reasoning:* the question a user has when the queue is empty (*"where did everything go?"*) is
-the same one they have when it's full (*"what is this waiting for?"*). Writing it twice is how
-those two answers drift apart. And both variants point *forward* — an empty extraction queue is
-usually not an error, it means the work moved to review, so the empty state's job is to say
-where rather than to apologize.
-
-**The completion banner renders where the batch's card was.** The user was watching that spot,
-so that is where the answer belongs — and the "nothing is extracting right now" empty state is
-suppressed while the banner is up, because by definition the queue is empty at that moment and
-*"nothing is extracting"* directly under *"extraction complete"* reads as the page contradicting
-itself.
-
-### Input components
-
-**`TopicChipInput` caches labels instead of deriving them.**
-*Reasoning:* chip labels were derived from the current search results, which only hold what
-matches what's typed *right now*. So a selected topic's name turned back into a raw UUID the
-moment you typed something that didn't match it — and a freshly created topic became a UUID as
-soon as you cleared the box. It looked like the selection had been lost. Labels now accumulate
-into a ref-held `Map`, and any id still unlabelled (a suggested topic seeded from a review
-payload, or one outside the typeahead window) is resolved by a `getTopicsByIds` fetch, so a chip
-is never a bare UUID.
-
-**One flat option list, so mouse and keyboard commit through the same path.**
-The typeahead results and the synthetic `+ Create "…"` row are one `options` array; `Enter` and
-click both call `commitOption`. Two lists would be two chances for the create row to behave
-differently depending on how you reached it. The highlight index is *clamped* on read rather
-than reset from an effect, because the list shrinks whenever a search settles and a stale index
-must never point past it.
-
-**The blur-vs-click race, fixed properly.**
-The dropdown originally closed on the input's `onBlur` after a 100ms `setTimeout`. That raced
-every click: `mousedown` on an option blurs the input, 100ms later the dropdown unmounts, and a
-deliberate click — mouseup more than 100ms after mousedown, which is most of them — landed on a
-button that no longer existed and **silently selected nothing.** Now the wrapper's `onBlur`
-checks `relatedTarget` containment so it closes only when focus genuinely leaves the widget,
-*and* options `preventDefault` on mousedown so the input never loses focus to them at all.
-Two mechanisms because the first makes it correct and the second makes it not depend on
-event ordering.
-
-**Enter used to do nothing.** Typing a topic name and pressing Enter left the text sitting in the
-box, uncommitted — so the upload carried no topic hint even though it looked like one had been
-picked. Silent no-ops on the primary key of a text input are the worst class of UI bug: nothing
-is wrong on screen.
-
-**A failed create is surfaced.** Without it, a rejected `createTopic` was completely silent and
-the typed name just sat there looking accepted.
-
-**Async callbacks read the selection from a ref.** `createTopic`'s `onSuccess` appends to
-`selectedIdsRef.current`, not to the `selectedIds` captured when the request went out, so a
-selection made while the create was in flight isn't clobbered. And because topic creation is
-get-or-create server-side, the success handler checks membership before appending — otherwise
-creating a topic that already existed duplicated its chip.
-
-### Performance
-
-**Lottie is code-split, and it's the light build.**
-*Reasoning:* `lottie-react` re-exports every engine build from one barrel and `lottie-web`'s
-builds aren't side-effect-free, so a static import pulls ~200 kB of player into the entry chunk
-for animations that appear on three screens. The animation JSON is heavy too.
-[`createLazyLottie`](frontend/src/components/common/lazyLottie.jsx) defers both behind
-`React.lazy`, so they arrive while the user is already waiting on work.
-`LottieLight` specifically, because the light build drops the expression engine — which none of
-these animations use and which is the part carrying a direct `eval`.
-
-**Previews are cached forever; the queues poll adaptively.**
-A stored original never changes and partitioning a large scan isn't cheap, so
-`["documentPreview", id]` uses `staleTime: Infinity` — remounting the review pane doesn't re-run
-it. The queues go the other way: `refetchInterval` returns 2s when there are rows and 5s when
-there aren't, and the batch poll returns `false` once nothing is in flight, so an idle queue
-stops asking.
-
-**`refetchOnWindowFocus: false` globally.** With adaptive polling already covering the live
-surfaces, focus-refetching every query on every tab switch was redundant load that also caused
-visible reshuffles on the review screen.
+**Two shared LLM helpers, not per-call-site prompting.**
+*Reasoning:* six call sites needed an LLM. Five of them are the same shape — *here is a list,
+which entries apply?* — used for schema matching, topic suggestion, and query-time topic
+detection. Routing them all through `llm_classify`/`llm_extract` with strict JSON-schema
+responses means the pattern is implemented once, and a prompt improvement lands everywhere.
+*Alternative rejected:* embedding-similarity-against-topic-centroids for query routing. It
+would have been a *second* mechanism for a problem one mechanism already solved. Held as a
+scale optimization, not built.
 
 ---
 
 ## Decisions I reversed
 
-The ones where the first answer was wrong in a way the design couldn't show.
+These are the ones I'd want a teammate to read, because the first answer was wrong in a way
+that wasn't visible from the design.
 
-**Deleting a batch celebrated it.** Covered above — the single best example in the project of
-two conditions producing one indistinguishable signal. The fix isn't clever; it's recognizing
-that the delete is the only party with the missing information and making it responsible for
-saying so.
+**File-hash dedup: removed after building it.**
+The original design had two dedup tiers, exact-hash at upload and identity-field
+post-extraction. Hash dedup shipped as a `UNIQUE` constraint, and it was wrong in a way the
+design couldn't show: re-uploading the same bytes was *silently folded into the existing
+document*. No new document, no new job — so nothing extracted, and nothing appeared in the
+extraction or review queues. The user uploaded a file and the product did nothing, with no
+explanation. [Migration 0002](migrations/versions/0002_allow_duplicate_uploads.py) drops the
+constraint and keeps `file_hash` as a plain index. Every upload is now its own document with
+its own extraction run. The deeper mistake was treating "these bytes are identical" as
+equivalent to "the user didn't mean this" — the byte-level tier was answering a question
+nobody asked, while the identity-field tier answers the real one.
 
-**Chat history moved from `localStorage` to the server.** `useChatHistory` kept one flat message
-list in `localStorage`: exactly **one conversation per browser**, gone on a cleared profile,
-invisible from any other device. Conversations are now server-side records, which is what made
-a session list, rename and delete possible at all.
-*And then a second bug inside the fix:* reopening a conversation seeded messages from "any
-payload for this chat id," which replayed whatever was in the query cache — and that snapshot
-goes stale the moment another turn is appended. Reopening a two-question conversation showed
-only the first question. Seeding now waits for a *settled* fetch of the chat that was actually
-asked for (`chat.id === pendingChatId && !isFetching`); the `!isFetching` half is the important
-one, because react-query hands back cached data immediately and refetches behind it, and that
-cached copy is precisely the stale snapshot that truncated the transcript. Turns otherwise live
-in local state, so a freshly answered question can't flicker out while a refetch lands.
+**Dedup went from blocking a confirm to informing one.**
+Following from the above: an identity match used to disqualify a job from bulk confirm and
+refuse the save. Now duplicates are explicitly acceptable, the default is keep-both, and the
+match is information on the review screen. Refusing to save data the user can see is correct
+is a bad default.
 
-**A frozen progress page.** Covered above: the bookmarked-URL fallback query had no
-`refetchInterval`, so it showed a permanent snapshot of whatever was true when the page loaded,
-including "still extracting" for work that had long finished — *and* withheld the link forward,
-because `allTerminal` read the same frozen data.
+**Graceful fallback hid three real bugs — and that's the lesson.**
+The router falls back to RAG when the SQL branch can't answer. That is the right behaviour and
+I'd keep it, but it is *silently* the right behaviour, and it turned three hard failures into
+plausible-looking answers:
 
-**The dropdown's 100ms blur timeout.** Covered above. The lesson I'd carry: a timing constant
-standing in for "has the click finished" is always a race, and the fix is to ask the DOM what
-it actually knows (`relatedTarget`) rather than to tune the number.
+1. The model qualified every view with the schema's *logical* name — `invoice.view_invoice`.
+   Nothing lives in a Postgres schema called `invoice`, so every generated query died on
+   `UndefinedTable`. **Structured questions never once got a structured answer**, and the
+   product looked like it was working.
+2. Topic scoping was expressed as a subquery against `document_topics` — a table the
+   read-only role deliberately has no grant on. Every topic-scoped query failed with
+   `InsufficientPrivilege` and fell back. Fixed by resolving document IDs up front and passing
+   them in, which keeps the role's "views only" boundary intact rather than widening it.
+3. `compose_sql_answer` was a hardcoded `"Ran a SQL query and found N row(s)."` — the query
+   page reported that something had happened without answering the question.
 
-**`Content-Disposition: inline` does not do what I assumed.** The review pane pointed an
-`<iframe>` at the raw bytes and hoped. Browsers ship viewers for PDF, common web images, plain
-text and HTML — everything else (`.docx`, `.xlsx`, `.pptx`, `.csv`, `.eml`, a multi-page
-`.tiff`) went to the **download manager** instead. The header expresses intent; it cannot hand
-the browser a renderer it doesn't have. The server now decides which renderer applies and
-converts the rest into a structured element list, and
-[`DocumentViewer`](frontend/src/components/DocumentViewer/DocumentViewer.jsx) dispatches on
-`kind`. Three things I'd call out:
-- The converter is `unstructured.partition` — **the same parser the extraction pipeline uses**,
-  so the reviewer sees the text the extraction saw rather than a second, differently-lossy
-  rendering. Reviewing against a different view of the file than the model read is a subtle way
-  to make review useless.
-- `unsupported` is an explicit case, not a fallthrough. An unpreviewable file says so instead of
-  silently starting a download nobody asked for.
-- An uploaded HTML file renders in an iframe with `sandbox=""` — no scripts, no forms, no
-  navigation. It's untrusted content the user uploaded, and it's the one preview path that
-  renders foreign markup natively.
+The fix for (1) is a repair pass in `normalize_sql` that strips any qualifier from an
+otherwise-valid view name, rather than another attempt at prompting the model out of it.
+Prompt instructions are a request; the normalizer is a guarantee.
 
-**Graceful fallback hid three real bugs.** The query router falls back to RAG when the SQL branch
-can't answer, which is right, and *silently* right — so three hard failures rendered as
-plausible answers. A schema-qualified view name (`invoice.view_invoice`) meant **structured
-questions never once got a structured answer**; topic scoping hit `InsufficientPrivilege` on a
-table the read-only role deliberately can't see; and the SQL answer was a hardcoded `"Ran a SQL
-query and found N row(s)."` The durable lesson: **a fallback path needs to be loud** — every
-rejection logs, and the response reports `routing_used` and the SQL that ran, so the UI can show
-which branch answered. The structural fix for the first was a repair pass in the SQL normalizer
-rather than another attempt at prompting: *prompt instructions are a request; the normalizer is
-a guarantee.*
+The durable lesson: **a fallback path needs to be loud.** Every rejection and every fallback
+now logs with the offending SQL, and the query response reports `routing_used` and the SQL
+that actually ran, post-repair — so both a developer reading logs and a user reading the page
+can tell which branch answered. Designing for graceful degradation without observability
+means building a system that hides its own breakage, and I'd caught none of these without
+going looking.
 
-**File-hash dedup: removed after building it.** A `UNIQUE` constraint on `file_hash` silently
-folded a byte-identical re-upload into the existing document — no new job, so nothing extracted
-and nothing appeared in either queue. **The user uploaded a file and the product did nothing,
-with no explanation.** The deeper mistake was treating "these bytes are identical" as "the user
-didn't mean this." Identity-field dedup answers the real question; the byte tier answered one
-nobody asked. Following from that, a dedup match went from *blocking* a confirm to *informing*
-one — refusing to save data the user can see is correct is a bad default.
+**Auto-detected topic scope now relaxes itself; explicit scope never does.**
+Query-time topic detection narrows the search, which is right when it's right and silently
+destructive when it's wrong: an auto-detected topic holding none of the matching chunks
+answered *"there are no sources available"* while the documents sat in plain sight under
+another topic. Both branches now retry unscoped when a scope produced nothing — **but only
+when the scope was our own guess.** An explicit user selection is honoured even when it
+matches nothing, because that is a deliberate narrowing and overriding it would be lying
+about what was searched. The distinction is threaded through as an `auto_detected` flag rather
+than inferred, since the two cases are indistinguishable by the time you have the topic IDs.
 
-**Auto-detected query scope now relaxes itself; explicit scope never does.** An auto-detected
-topic holding none of the matching chunks answered *"there are no sources available"* while the
-documents sat in plain sight under another topic. Both branches retry unscoped when a scope
-produced nothing — **but only when the scope was our own guess.** An explicit user selection is
-honoured even when it matches nothing, because overriding it would be lying about what was
-searched.
+**Previews: `Content-Disposition: inline` does not do what I assumed.**
+The review screen needs to *show* the original file. Pointing an `<iframe>` at the raw bytes
+works for the few types a browser ships a viewer for — PDF, web images, text, HTML — and
+turns into a **download** for every other type the pipeline accepts: `.docx`, `.xlsx`,
+`.pptx`, `.csv`, `.eml`, a multi-page `.tiff` scan. The header expresses intent; it cannot
+hand the browser a renderer it doesn't have. Those types are now converted server-side into a
+structured element list the frontend renders as real DOM — using `unstructured.partition`,
+the same parser the extraction pipeline uses, **so the reviewer sees exactly the text the
+extraction saw** rather than a second, differently-lossy rendering. Reviewing against a
+different view of the file than the model read is a subtle way to make review useless.
 
----
-
-## Backend decisions, in brief
-
-Fuller treatment in [`plans.md`](plans.md); these are the calls that shaped the product.
-
-**Nothing reaches the real tables until a human confirms.** The pipeline stages its output in
-`jobs.result` and stops at `awaiting_review`; `confirm.py` is the only writer of
-`extracted_records`, `document_topics` and `chunks`, in one transaction. An LLM extraction is a
-*proposal*. This is the decision the whole trust story — and the entire review screen — rests
-on. *Cost accepted:* a 50-file batch needs a human before it's queryable, mitigated by bulk
-"confirm all clean."
-
-**The hardest systems problem was making extracted values genuinely queryable.** The model is
-instructed to report what the document says, and does: `"83,880.00"`, `"9%"`, `"₹1,250.50"`,
-`"(1,200.00)"`. Every one is a correct reading; not one survives `::numeric`. Worse, the failure
-isn't local — a hard cast in the generated view means **one unparseable cell takes down the whole
-view for every row and every consumer.** Four layers: normalize on write; *refuse to guess*
-(dates are deliberately untouched — `03/04/2026` is genuinely ambiguous and a wrong guess is
-worse than a null); `safe_*` cast functions that null out one cell instead of raising;
-re-normalize at confirm time, because a reviewer typing `1,250.00` carries the same problem as
-the model. Layers 1 and 3 are redundant on purpose.
-
-**One Postgres instance does four jobs:** relational store, job queue (`FOR UPDATE SKIP LOCKED`,
-no broker), vector index (`pgvector`), full-text index. One datastore means one transaction
-boundary and a setup a stranger can run in one shot. *Accepted:* polling latency, and `pgvector`
-will lose to a dedicated store at millions of vectors.
-
-**One physical store per schema lineage with a generated view, not a table per version.**
-Table-per-version makes *"total spend across all invoices"* `UNION` every historical table — a
-query-time tax that grows with every schema edit. Records are JSONB stamped with
-`(schema_id, version)`; the view flattens the union of every version's fields.
-
-**Two independent rails on generated SQL:** a `sqlglot` parse that rejects anything but a single
-pure `SELECT` (checking write/DDL nodes *anywhere* in the tree, since a write hides inside a
-CTE), and execution through a Postgres role with `SELECT` on the views and nothing else.
-Scope is *injected* into the parsed statement, not requested in the prompt — the model could omit
-a requested filter, and when it did the aggregate ran over the whole corpus while the UI
-reported "searched within 1 topic(s)" beside it.
-
-**A routing layer, not one query mechanism.** RAG can't reliably total invoices across
-documents; SQL can't answer *"what does this agreement say about cancellation?"* Both question
-types are native here.
-
-**Local embeddings (`bge-small-en-v1.5`).** Embedding is the one cost that scales with corpus
-size rather than user activity — local means no per-chunk cost, no ingest rate limit, and the app
-works offline.
+Two smaller things fell out of this. `documents.mime_type` holds the browser-supplied
+`content_type`, which is routinely empty or `application/octet-stream` for drag-and-drop —
+and an octet-stream PDF downloads even though the browser has a perfectly good PDF viewer.
+Media types and renderer choice are both derived from the filename instead. And audio/video
+are played, not transcribed: `unstructured` will happily transcribe them, but a transcript is
+not a preview of a sound file.
 
 ---
 
@@ -537,56 +439,64 @@ works offline.
 
 | Cut | Why it was right for this build | What it would take |
 | --- | --- | --- |
-| Optimistic updates on mutations | Every mutation here is either cheap or irreversible. Optimistically showing a confirm that then failed would claim data is live when it isn't | Per-mutation rollback, and a rule for which are safe to fake |
-| Focus trapping / full a11y audit | Custom modal and dropdown carry ARIA roles and keyboard nav, but not focus containment | `inert` or a focus-trap on `Modal`, then a real audit |
-| Mobile layout | The review screen is a side-by-side document/table comparison — the one job the product exists for, and not a phone task. Grid tracks and tables assume desktop width | A stacked review layout with a preview/table toggle |
-| Token-streamed answers | The Ask page shows a thinking state and returns a composed answer. Streaming is polish, not capability | SSE on `/query`, incremental `ChatMessage` render |
-| Undo | Nothing is undoable, so destructive actions get dialogs instead. A fake undo is worse than none | Soft-delete server-side first |
-| Auth, multi-tenancy | Proves nothing about the pipeline; tenant filters interact badly with NL-to-SQL | `tenant_id`, RLS, injected predicate |
-| Edit/delete on confirmed records | Append-only. Mutation means cascade rules across records, chunks and vectors | Soft-delete plus chunk/vector reconciliation |
-| Batch schema consistency | Similar documents in one batch can independently infer different schemas. Real risk, accepted — human review is the net | Pre-clustering, or bulk-apply-schema on review |
-| Stuck-job recovery | `jobs.locked_at`/`locked_by` are written but nothing sweeps them — a worker killed mid-job leaves the job `extracting` forever | A reaper returning timed-out jobs to `pending`, with an attempt counter |
+| Auth, users, multi-tenancy | Proves nothing about the pipeline; tenant filters interact badly with NL-to-SQL, the riskiest component | `tenant_id` on `documents`/`topics`, RLS, an injected predicate in `generate_sql` |
+| Edit/delete on confirmed records, documents, topics, schemas | Append-only. Mutation means cascade rules across records, chunks, and vectors, and the review gate already catches errors before they land | Soft-delete plus chunk/vector reconciliation |
+| Topic hierarchy | Flat topics answer the scoping question. Nesting adds tree UI and recursive scoping for no gain at this size | Parent FK, recursive CTE for scope resolution |
+| Fuzzy topic matching and topic merge | Case-insensitive get-or-create prevents the common duplicate. Fuzzy matching risks silently merging two genuinely distinct topics | Similarity threshold, plus a merge tool with provenance rewriting |
+| Batch schema consistency | Similar documents in one batch can independently land on different inferred schemas. Real risk, accepted knowingly — human review is the safety net | Pre-clustering before per-document matching, or bulk-apply-schema on review |
+| LLM retry and backoff | A failed job is recorded with its error and is re-runnable. Retry logic is easy to add and hard to *tune* blind | Bounded exponential backoff, distinguishing rate-limit from malformed-response |
+| Stuck-job recovery | `jobs.locked_at`/`locked_by` are written, but nothing sweeps them — a worker killed mid-job leaves the job `extracting` forever | A reaper returning jobs locked beyond a timeout to `pending`, with an attempt counter |
+| Streaming answers | The query page shows a thinking state and returns a composed answer. Token streaming is polish, not capability | SSE on the query endpoint |
 
-The last one is what I'd be least comfortable shipping, which is why it's listed rather than
-buried.
+The last two are the ones I'd be least comfortable shipping to real users, and they are listed
+here rather than buried because a 5-day prototype that pretends to be production-ready is
+less trustworthy than one that says where the edges are.
 
 ---
 
 ## What I don't trust yet
 
-**The completion mechanism is inference, not an event.** `useBatchCompletion` is careful and I
-believe it's correct for the cases enumerated above, but it infers a state change from a filtered
-list's contents. It's coupled to both queues staying filtered the way they are today — a future
-change that shows confirmed documents in the review queue would break completion detection
-silently, because "present, then absent" would simply stop happening. A `batch_completed` event
-or a status field on the batch would make it a fact rather than a deduction.
+Honest read on where this would break first.
 
-**Frontend test coverage is thin and lopsided.** The Playwright suite drives a real Chromium
-(not the headless shell, which ships no PDF viewer and would "download" every PDF regardless of
-what the app does) across both surfaces that show a document, and the preview type-resolution
-test reads the supported-extension list *out of `unstructured` itself*, so gaining a new file
-type fails the suite rather than silently shipping a download. But that's preview coverage. The
-logic most likely to regress — `useBatchCompletion`'s three-way disambiguation, the review
-draft's seed-once-per-run rule, the chip input's label cache — is verified by hand. Those are
-pure-ish functions over enumerable states, and they're where I'd start.
+**Test coverage is lopsided, and it's lopsided in the wrong direction.** The suite is
+genuinely good where it exists — [`test_preview_kinds.py`](tests/test_preview_kinds.py) reads
+the supported-extension list *out of `unstructured` itself*, so gaining a new supported file
+type **fails the suite** instead of silently shipping a file the review screen would download;
+the Playwright tests drive a real Chromium (not the headless shell, which ships no PDF viewer
+and would "download" every PDF regardless of what the app does) across both surfaces that
+show a document. But that is preview and chat coverage. The two components most likely to
+cause real damage — value coercion and the NL-to-SQL safety rails — have **no direct tests**,
+and coercion in particular is pure, table-driven, and the easiest thing in the codebase to
+test well. That's the first gap I'd close.
 
-**A dropped SSE connection is covered; a slow one isn't.** The fallback poll catches an
-`EventSource` that dies, but a stream that stays open and simply stops delivering looks
-identical to a job that's genuinely still working. There's no staleness timeout on progress.
+**The routing decision is an LLM call with no ground truth.** `decide_routing` picks SQL or
+RAG per question and nothing measures whether it picks correctly. The fallback means a wrong
+"sql" choice degrades to RAG, but a wrong "rag" choice on an aggregate question produces a
+confidently-worded, possibly-wrong number — the failure mode with no safety net. What this
+needs is an eval set of questions with known-correct routes, not more prompt engineering.
 
-**No error boundary.** A render-time exception anywhere below `AppShell` blanks the app. The
-review screen's type guard exists precisely because that page had the most likely path to one,
-but that's a point fix where a boundary is the general answer.
+**Extraction quality is unmeasured.** There is no labelled set, so "accuracy" is an
+impression from manual testing. The confidence scores are the model's self-report, which is
+not the same thing as calibration — a score of 0.9 does not mean nine out of ten are right,
+and `is_job_clean` thresholds against it as though it did.
 
-**Concurrency across tabs is unhandled.** Two tabs open on the same job can both PATCH a review
-draft, last write wins, and neither is told. Single-user was a deliberate scope call, but "one
-user, two tabs" is a real situation the design doesn't address.
+**Single-document context limits are handled; single-*field* ambiguity isn't.** The chunked
+extraction path merges field-by-field and keeps the lower confidence on disagreement, which
+flags a conflict but doesn't resolve it — the reviewer sees a value and a low score, not the
+two candidate values and where each came from. Showing both would be the better answer.
 
-**The routing decision has no ground truth.** `decide_routing` picks SQL or RAG per question and
-nothing measures whether it picks correctly. A wrong "sql" degrades to RAG; a wrong "rag" on an
-aggregate question produces a confidently-worded, possibly-wrong number — the failure mode with
-no safety net. That needs an eval set, not more prompt engineering.
+**Row extraction over the chunked path is the weakest link in the multi-row feature.** The
+storage side is pinned by tests and behaves at any row count, but *finding* the rows is not
+measured. Document-level fields and rows merge across chunks by deliberately opposite rules —
+document fields reconcile, rows concatenate — and concatenation is only correct if the chunk
+boundaries don't cut a table. `chunk_by_title` makes no such promise, so a long table split
+mid-way can yield a duplicated or a partial row, and an all-null row is dropped on the
+assumption it means "no line items here" rather than "the model lost the table." Both are
+judgement calls standing in for a labelled set. A one-shot extraction under
+`MAX_EXTRACT_CHARS` — the common case — doesn't have this problem at all, which is why it
+wasn't worth solving speculatively; splitting on element boundaries so a `Table` element is
+never cut is the obvious next move if real documents show it.
 
-**Extraction quality is unmeasured.** No labelled set, so "accuracy" is an impression from manual
-testing. Confidence scores are the model's self-report, which is not calibration — 0.9 does not
-mean nine of ten are right, and `is_job_clean` thresholds against it as though it did.
+**Scale is untested past prototype volumes.** `pgvector` without a tuned index, hybrid-search
+weights picked by judgement, a poll-based queue: all reasonable at hundreds of documents, all
+worth re-measuring at hundreds of thousands.

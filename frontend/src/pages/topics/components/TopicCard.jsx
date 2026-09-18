@@ -8,7 +8,6 @@ import { Modal } from "../../../components/common/Modal";
 import { TrashIcon } from "../../../components/common/Icon";
 import { useToast } from "../../../components/common/Toast";
 import { DeleteDocumentButton } from "../../../components/DeleteDocumentButton/DeleteDocumentButton";
-import { ReextractDocumentButton } from "../../../components/ReextractDocumentButton/ReextractDocumentButton";
 import styles from "./TopicCard.module.css";
 
 /** The fallback topic every untagged document lands on (decision #16). The
@@ -152,13 +151,8 @@ export function TopicCard({ topic }) {
                   <li key={doc.id}>
                     <span className={styles.filename}>{doc.filename}</span>
                     <StatusBadge status={doc.latest_job_status} />
-                    {/* Removing the topic (above) keeps the documents; these
-                        act on one document. Re-extract only offered once the
-                        document is settled - a pending or in-review job would
-                        get a 409 from the endpoint anyway. */}
-                    {doc.latest_job_status === "confirmed" && (
-                      <ReextractDocumentButton documentId={doc.id} filename={doc.filename} iconOnly />
-                    )}
+                    {/* Removing the topic (above) keeps the documents; this
+                        removes one document outright, records included. */}
                     <DeleteDocumentButton documentId={doc.id} filename={doc.filename} iconOnly />
                   </li>
                 ))}

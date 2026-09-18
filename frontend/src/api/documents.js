@@ -63,21 +63,3 @@ export function getDocumentPreview(documentId) {
 export function deleteDocument(documentId) {
   return apiFetch(`/documents/${documentId}`, { method: "DELETE" });
 }
-
-/**
- * Queues a re-extraction of an already-confirmed document.
- *
- * Distinct from `reextractJob`, which only accepts a job still awaiting
- * review. This enqueues a `backfill`: structured extraction re-runs against
- * the document's existing schema version, the job returns to the review
- * queue, and confirming it replaces the existing record instead of adding a
- * second one. Schema matching, topic suggestion and chunking do not re-run.
- *
- * Rejects with 400 if the document has no schema to score against, and 409
- * if it already has a job in progress or awaiting review.
- *
- * Resolves to `{ job_id, document_id, kind, schema_version_id }`.
- */
-export function reextractDocument(documentId) {
-  return apiFetch(`/documents/${documentId}/reextract`, { method: "POST" });
-}
