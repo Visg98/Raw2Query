@@ -40,3 +40,7 @@ README.md
 DEPLOY.md
 decisions.md
 plans.md
+
+# Sample documents and walkthroughs - uploaded through the UI, never read from
+# inside a container.
+Try_These/

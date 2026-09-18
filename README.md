@@ -1,180 +1,207 @@
 # raw2query
 
-Messy documents in, structured & queryable data out.
+**Messy documents in, structured and queryable data out.**
 
-- [`decisions.md`](decisions.md) - how the problem was interpreted, the calls made along the
-  way, what was reversed, and what was deliberately cut. **Start here.**
-- [`plans.md`](plans.md) - the up-front design, as 23 numbered architecture decisions the
-  code refers back to.
-- [`DEPLOY.md`](DEPLOY.md) - running this on a public VM: why the backend can't go anywhere
-  serverless, and the Compose/Caddy/Netlify setup that hosts it.
+Organisations sit on piles of documents that contain the data they need but not in
+a form anything can use: invoices as scanned PDFs, policies as Word files,
+statements as spreadsheets, correspondence as email exports. The information is
+there, and the only way to get at it is for a person to open each file and retype
+what they see into a spreadsheet or a system. That work is slow, it does not scale,
+and it quietly introduces errors nobody catches.
 
-- **API**: FastAPI (uploads, review/confirm, schema/topic CRUD, NL query, SSE progress)
-- **Worker**: a poll-loop process running the extraction pipeline (`unstructured` + `sentence-transformers` + Groq)
-- **DB**: Postgres + `pgvector` - one database for structured records, topics, jobs, and vectors; the job queue is a Postgres table (`SELECT ... FOR UPDATE SKIP LOCKED`), no Redis/Celery
-- **Frontend**: React + JSX (Vite) in [`frontend/`](frontend/)
+raw2query removes that step. Drop a pile of documents in, and it:
 
-## Quick start
+- **Reads anything.** PDFs (including scanned ones, via OCR), Word, Excel,
+  PowerPoint, CSV, email, images, plain text.
+- **Works out what each document is.** It matches a document against the schemas
+  you already have, and where nothing fits it proposes a new shape from the
+  document itself, rather than making you define every format up front.
+- **Pulls out the fields** into real database columns, with a **confidence score
+  per field**.
+- **Asks for help only where it is unsure.** Anything above the confidence
+  threshold can be confirmed in bulk; anything below is flagged for a human to
+  check. You review the extraction side by side with the original document, fix
+  what is wrong, and confirm.
+- **Makes it queryable in plain English.** Ask "what is the total due across all
+  invoices from Aster?" and it writes and runs SQL against the extracted tables.
+  Ask "what is the policy on sharing client information?" and it retrieves the
+  relevant passages and answers from them. It decides which of the two approaches
+  fits the question.
+
+**What that changes:** the expensive part of document work stops being data entry
+and becomes review — and only of the fields the system flagged. The data lands
+somewhere you can query, so questions that used to mean opening twenty files
+become one sentence.
+
+## Live demo
+
+**https://raw2query.netlify.app/upload**
+
+Sample documents to try it with, and two guided walkthroughs, are in
+[`Try_These/`](Try_These/).
+
+## Tech stack
+
+| Layer | Choice | Why |
+| --- | --- | --- |
+| **API** | FastAPI (Python 3.11) | Async HTTP, automatic OpenAPI docs at `/docs`, Pydantic validation on every boundary. |
+| **Worker** | A plain Python poll loop | Separate process so heavy OCR never blocks a web request. |
+| **Queue** | Postgres `SELECT … FOR UPDATE SKIP LOCKED` | The job queue is a table. No Redis, no Celery — one less service to run, and claims are transactional. |
+| **Database** | Postgres 16 + `pgvector` | One store for structured records, documents, jobs, topics *and* embeddings. Vector search sits next to the relational data instead of in a separate system. |
+| **ORM / migrations** | SQLAlchemy 2 + Alembic | |
+| **Document parsing** | `unstructured[all-docs]` | One parser covering every supported format, plus OCR (`tesseract`, `poppler`) for scanned pages. |
+| **Embeddings** | `sentence-transformers`, `BAAI/bge-small-en-v1.5` (384-dim) | Runs locally on CPU, so indexing costs nothing per document. |
+| **LLM** | Groq, via the OpenAI-compatible SDK | Used for schema matching, field extraction, topic suggestion, query routing, SQL generation and answer composition. Swappable by changing a base URL. |
+| **SQL safety** | `sqlglot` + a restricted DB role | Generated SQL is parsed and rejected unless it is a single read-only `SELECT`, then executed as a role that can only read the generated views. |
+| **Frontend** | React 19 + Vite 8, React Router, TanStack Query | |
+| **Deployment** | Docker Compose behind Caddy; frontend on Netlify | Caddy terminates TLS with automatic Let's Encrypt certificates. |
+
+## Architecture
+
+```
+                 ┌──────────────────────────────────────────┐
+  Browser ──────▶│  React SPA (Vite)                        │
+                 │  upload · review · schemas · topics · ask │
+                 └───────────────────┬──────────────────────┘
+                                     │ HTTPS/JSON + SSE
+                 ┌───────────────────▼──────────────────────┐
+                 │  FastAPI                                 │
+                 │  uploads, review/confirm, schema & topic │
+                 │  CRUD, NL query, progress streaming      │
+                 └───────┬──────────────────────┬───────────┘
+                         │ writes job row       │ reads/writes
+                         ▼                      ▼
+        ┌────────────────────────┐   ┌──────────────────────────────┐
+        │  Postgres + pgvector   │◀──│  Worker (1..N processes)     │
+        │                        │   │  claims jobs FOR UPDATE      │
+        │  documents  jobs       │   │        SKIP LOCKED           │
+        │  schemas    versions   │   └──────────────┬───────────────┘
+        │  extracted_records     │                  │
+        │  chunks (vector 384)   │                  ▼
+        │  topics     batches    │        8-step pipeline:
+        │  view_<schema> (views) │        partition → chunk → embed
+        └────────────────────────┘        → match schema → extract
+                                          → score confidence
+                                          → suggest topics → stage
+```
+
+**The flow.** An upload writes one `documents` row and one `pending` job per file,
+then returns immediately — the browser follows progress over Server-Sent Events. A
+worker claims a job, runs the pipeline, and leaves the result *staged* on the job
+rather than in the live tables. Confirming a job is what commits it: the record is
+written to `extracted_records`, and a `view_<schema_name>` view is generated so the
+schema's fields appear as ordinary SQL columns.
+
+**Asking a question** routes one of two ways. A question about values that live in
+columns becomes SQL: the model sees only a catalogue of column names, its output is
+parsed by `sqlglot` and rejected unless it is a single read-only `SELECT`, and it
+runs as a restricted role with `SELECT` on the generated views and nothing else —
+so a bad generation fails rather than reaching a base table. A question about
+wording or meaning goes to retrieval instead: hybrid vector plus full-text search
+over `chunks`, with the answer composed from the passages retrieved.
+
+**Why the worker is separate.** OCR on a scanned PDF is CPU-bound and takes
+seconds to minutes. Run it in the request and uploads time out; run it in a
+separate process and the API stays responsive while extraction proceeds. Because
+the queue is a Postgres table using `SKIP LOCKED`, scaling out is just starting
+more worker processes — they cannot claim the same job.
+
+## Setup
+
+### Prerequisites
+
+- Docker and Docker Compose
+- Python 3.11+
+- Node.js 20.19+ or 22.12+ (for the frontend)
+- A Groq API key — free at [console.groq.com](https://console.groq.com)
+
+### For a human
+
+```bash
+git clone https://github.com/Visg98/Raw2Query.git
+cd Raw2Query
+cp .env.example .env
+```
+
+Put your key in `.env`:
+
+```
+GROQ_API_KEY=gsk_...
+```
+
+Then start everything with one command:
 
 ```bash
 ./run.sh
 ```
 
-Brings up Postgres (docker), runs migrations, starts the API, 2 worker processes, and the
-frontend dev server, all in one shot - then `Ctrl+C` stops everything it started. Fill in
-`GROQ_API_KEY` in `.env` first for uploads/queries that call the LLM (everything else - the
-UI, schemas, topics - works without it). See `./run.sh --help` for options (`--workers N`,
-`--skip-install`, `--no-db`, `--keep-db`). The manual steps below are what it automates, useful
-if you want to run pieces individually or debug a step.
+That brings up Postgres in Docker, runs the migrations, starts the API, two worker
+processes and the Vite dev server. `Ctrl+C` stops everything it started.
 
-## Layout
+- Frontend: **http://localhost:5173**
+- API docs: **http://localhost:8000/docs**
 
-```
-app/
-  api.py              FastAPI app (routers only, no heavy work)
-  worker.py           poll loop: python -m app.worker
-  config.py           Settings, loaded from .env
-  models.py           SQLAlchemy ORM (plan section 2)
-  schemas_pydantic.py API request/response models
-  serializers.py       ORM -> Pydantic assembly
-  storage.py           local file storage (./data/uploads)
-  preview.py           turns an original upload into something a browser can
-                        render - the types with no native viewer (.docx,
-                        .xlsx, .pptx, .csv, .eml) are converted here
-  routers/            documents, jobs, batches, schemas, topics, query, chats
-  pipeline/
-    llm.py             the two shared LLM helpers: llm_classify / llm_extract
-    embeddings.py       sentence-transformers wrapper
-    extract.py          the 8-step per-document pipeline + backfill entry point
-    confirm.py          commits jobs.result into the real tables (decision #19)
-    views.py            generates/regenerates view_<schema_name>; reconciles
-                        every view on startup (also `python -m app.pipeline.views`)
-    topics_util.py       get-or-create topic + "Uncategorized" seed
-  schema_fields.py    column-key assignment + historical-name analysis, shared
-                        by view generation and dedup (decision #23)
-  query/
-    routing.py          topic auto-detect + sql-vs-rag routing (decisions #18/#20)
-    nl_to_sql.py         SQL generation, the column catalog, execution
-    sql_guard.py         the parser rail + scope injection (pure sqlglot)
-    rag.py               hybrid retrieval + answer composition
-migrations/            Alembic; 0001_initial creates everything, incl. the
-                        read-only query-runner role and the seeded topic.
-                        0005 backfills field column keys, 0006 adds
-                        extracted_records.row_index - run
-                        `python -m app.pipeline.views` after upgrading either
-docker/                Dockerfile.api (no OCR deps) / Dockerfile.worker (has them)
-```
+Useful flags: `./run.sh --help`, `--workers N`, `--skip-install`, `--no-db`,
+`--keep-db`.
 
-## Setup
+Everything except uploads and questions works without a key — you can browse the
+UI, define schemas and create topics before adding one.
 
-1. Copy `.env.example` to `.env` (already done) and fill in `GROQ_API_KEY`.
-   Everything else has a working default that matches `docker-compose.yml`.
+### For an agent
 
-2. Start Postgres:
-
-   ```bash
-   docker compose up -d db
-   ```
-
-3. Install the package (creates `app` as an importable package plus every
-   dependency, including `unstructured[all-docs]` and `sentence-transformers`
-   which are large - the worker's OCR path also needs `poppler-utils` and
-   `tesseract-ocr` as system packages, see `docker/Dockerfile.worker`):
-
-   ```bash
-   pip install -e .
-   ```
-
-4. Run migrations (creates all tables, the `vector`/`citext` extensions, the
-   restricted `raw2query_query_runner` role used by NL-to-SQL, and the seeded
-   "Uncategorized" topic):
-
-   ```bash
-   alembic upgrade head
-   ```
-
-5. Run the API and at least one worker, in separate terminals:
-
-   ```bash
-   uvicorn app.api:app --reload
-   python -m app.worker
-   ```
-
-   For real parallelism (decision #9), run multiple workers, or
-   `docker compose up --scale worker=4`.
-
-Full stack via Docker instead of steps 3-5: `docker compose up --build`.
-
-## Trying it out
+Non-interactive, with a verification step after each stage. Fail on the first
+non-zero exit rather than continuing.
 
 ```bash
-# create a schema
-curl -s localhost:8000/schemas -X POST -H 'content-type: application/json' -d '{
-  "name": "invoice",
-  "fields": [
-    {"name": "invoice_number", "type": "string", "required": true},
-    {"name": "vendor", "type": "string", "required": true},
-    {"name": "total", "type": "number", "required": true}
-  ],
-  "identity_fields": ["invoice_number", "vendor"]
-}'
+# 1. Configure. GROQ_API_KEY must be set in the environment already.
+cp -n .env.example .env
+sed -i "s|^GROQ_API_KEY=.*|GROQ_API_KEY=${GROQ_API_KEY}|" .env
+grep -q '^GROQ_API_KEY=gsk_' .env || { echo "GROQ_API_KEY not set in .env"; exit 1; }
 
-# upload a document
-curl -s localhost:8000/documents -F files=@/path/to/invoice.pdf
+# 2. Database. Wait for the healthcheck - do not assume it is ready.
+docker compose up -d db
+for i in $(seq 1 30); do
+  [ "$(docker inspect -f '{{.State.Health.Status}}' raw2query-db-1)" = healthy ] && break
+  sleep 3
+done
 
-# poll status, then review, then confirm
-curl -s localhost:8000/jobs/<job_id>
-curl -s localhost:8000/jobs/<job_id>/review
-curl -s localhost:8000/jobs/<job_id>/confirm -X POST -H 'content-type: application/json' -d '{}'
+# 3. Dependencies. Large: unstructured[all-docs] plus torch.
+python -m venv .venv && . .venv/bin/activate
+pip install -q -e .
 
-# ask a question
-curl -s localhost:8000/query -X POST -H 'content-type: application/json' \
-  -d '{"question": "what is the total across all invoices from Acme?"}'
+# 4. Migrations. Must run BEFORE the API starts: the startup hook queries the
+#    topics table with no error handling, so an unmigrated database crash-loops
+#    the API.
+alembic upgrade head
+docker compose exec -T db psql -U raw2query -tAc \
+  "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'"
+# expect 12
+
+# 5. Processes.
+uvicorn app.api:app --host 0.0.0.0 --port 8000 &
+python -m app.worker &
+
+# 6. Verify. /health does NOT check the database, so check a real endpoint too.
+curl -sf http://localhost:8000/health
+curl -sf http://localhost:8000/topics   # expect the seeded "Uncategorized" topic
+
+# 7. Frontend.
+cd frontend && npm ci && npm run dev
 ```
 
-Interactive API docs: `localhost:8000/docs`.
+Notes that matter when automating this:
 
-## Tests
+- `VITE_API_BASE_URL` and `VITE_DEMO_TOKEN` are inlined by Vite **at build time**.
+  Changing either requires a rebuild, not a restart.
+- The API and every worker must share the `UPLOAD_DIR` filesystem — the worker
+  reads back the exact file the API wrote.
+- `QUERY_RUNNER_DB_PASSWORD` must be set **before the first `alembic upgrade head`**.
+  Migration `0001` bakes it into the restricted role it creates, and it has to
+  match the password inside `READONLY_DATABASE_URL`.
+- The embedding model (~130 MB) downloads on first use. Persist the HuggingFace
+  cache or it re-downloads on every cold start.
 
-```bash
-pip install -e '.[dev]'
-pytest
-```
+### Deploying
 
-| File | Needs | What it covers |
-| --- | --- | --- |
-| `tests/test_preview_kinds.py` | nothing | Every extension `unstructured` can partition resolves to a renderable preview kind, and to the *right* one. The list is read out of the library, so gaining a new supported type fails the suite instead of shipping a file the review screen would download. |
-| `tests/test_document_preview_api.py` | Postgres | Uploads a real file of each type and checks `/documents/{id}/preview` over HTTP, plus the response headers on `/file`: no `Content-Disposition` for a preview, `attachment` only for `?download=1`, and never `application/octet-stream`. |
-| `tests/test_chats_api.py` | Postgres | Chat sessions: created by the first *answered* question and not before, turn ordering, listing/rename/delete. The LLM is stubbed. |
-| `tests/test_preview_ui_e2e.py` | Postgres, API, frontend, Playwright | Drives a real browser over both surfaces that show a document - the review pane and the Ask page's "View file" - and asserts no download fires for any supported type. Skipped unless `R2Q_E2E=1`. |
-
-Everything that needs a service it can't find skips with a reason rather than
-failing, so a bare `pytest` on a fresh checkout runs the type-resolution suite
-and stays green.
-
-The browser tests need both servers up and `R2Q_E2E=1`:
-
-```bash
-./run.sh &                      # or start the API and frontend by hand
-R2Q_E2E=1 pytest tests/test_preview_ui_e2e.py
-
-# non-default ports
-R2Q_E2E=1 R2Q_API_URL=http://localhost:8099 R2Q_APP_URL=http://localhost:5199 \
-  pytest tests/test_preview_ui_e2e.py
-```
-
-They launch the full Chromium build (`channel="chromium"`) rather than
-Playwright's default headless shell, which ships no PDF viewer and would
-"download" every PDF regardless of what the app does. Install it once with
-`playwright install chromium`.
-
-A few file types need system packages to preview at all: OCR for scanned
-images (`tesseract-ocr`) and `poppler-utils` for some PDFs - the same ones
-`docker/Dockerfile.worker` installs for extraction. Without them the preview
-endpoint returns an explained "can't preview this, download it" response
-rather than an error, and the tests for those types skip.
-
-## Known gap (deferred on purpose)
-
-No edit/delete on a confirmed record, document, topic, or schema - append-only
-for the prototype (plan section 6).
+Running this on a public server (Docker Compose, Caddy, TLS, the firewall
+specifics) is covered in [`DEPLOY.md`](DEPLOY.md).

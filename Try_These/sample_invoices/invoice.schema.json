@@ -1,0 +1,254 @@
+{
+  "name": "invoice",
+  "fields": [
+    {
+      "name": "invoice_number",
+      "type": "string",
+      "description": "Unique number assigned to the invoice.",
+      "required": true,
+      "scope": "document"
+    },
+    {
+      "name": "invoice_date",
+      "type": "date",
+      "description": "Date on which the invoice was issued.",
+      "required": true,
+      "scope": "document"
+    },
+    {
+      "name": "due_date",
+      "type": "date",
+      "description": "Final date by which the invoice must be paid.",
+      "required": true,
+      "scope": "document"
+    },
+    {
+      "name": "purchase_order_number",
+      "type": "string",
+      "description": "Purchase order number provided by the customer.",
+      "required": false,
+      "scope": "document"
+    },
+    {
+      "name": "seller_name",
+      "type": "string",
+      "description": "Legal name of the company issuing the invoice.",
+      "required": true,
+      "scope": "document"
+    },
+    {
+      "name": "seller_address",
+      "type": "string",
+      "description": "Registered address of the company issuing the invoice.",
+      "required": true,
+      "scope": "document"
+    },
+    {
+      "name": "seller_gstin",
+      "type": "string",
+      "description": "GST identification number of the seller.",
+      "required": true,
+      "scope": "document"
+    },
+    {
+      "name": "seller_email",
+      "type": "string",
+      "description": "Billing or contact email address of the seller.",
+      "required": false,
+      "scope": "document"
+    },
+    {
+      "name": "seller_phone",
+      "type": "string",
+      "description": "Contact phone number of the seller.",
+      "required": false,
+      "scope": "document"
+    },
+    {
+      "name": "customer_name",
+      "type": "string",
+      "description": "Name of the customer purchasing the products.",
+      "required": true,
+      "scope": "document"
+    },
+    {
+      "name": "customer_address",
+      "type": "string",
+      "description": "Billing address of the customer.",
+      "required": true,
+      "scope": "document"
+    },
+    {
+      "name": "customer_gstin",
+      "type": "string",
+      "description": "GST identification number of the customer.",
+      "required": false,
+      "scope": "document"
+    },
+    {
+      "name": "place_of_supply",
+      "type": "string",
+      "description": "State or location where the products are supplied.",
+      "required": true,
+      "scope": "document"
+    },
+    {
+      "name": "item_description",
+      "type": "string",
+      "description": "Item or product description for this line, including its SKU if shown.",
+      "required": false,
+      "scope": "row"
+    },
+    {
+      "name": "item_hsn",
+      "type": "string",
+      "description": "HSN/SAC classification code for this line item.",
+      "required": false,
+      "scope": "row"
+    },
+    {
+      "name": "item_quantity",
+      "type": "number",
+      "description": "Quantity billed on this line.",
+      "required": false,
+      "scope": "row"
+    },
+    {
+      "name": "item_unit",
+      "type": "string",
+      "description": "Unit of measure for this line, e.g. Nos, Set, Hrs.",
+      "required": false,
+      "scope": "row"
+    },
+    {
+      "name": "item_rate",
+      "type": "number",
+      "description": "Price per unit for this line, before tax.",
+      "required": false,
+      "scope": "row"
+    },
+    {
+      "name": "item_amount",
+      "type": "number",
+      "description": "Line total: quantity x rate, before tax.",
+      "required": false,
+      "scope": "row"
+    },
+    {
+      "name": "subtotal",
+      "type": "number",
+      "description": "Total value of all items before taxes and adjustments.",
+      "required": true,
+      "scope": "document"
+    },
+    {
+      "name": "discount_total",
+      "type": "number",
+      "description": "Total discount applied to the invoice.",
+      "required": false,
+      "scope": "document"
+    },
+    {
+      "name": "cgst_rate",
+      "type": "number",
+      "description": "Central GST percentage applied to the invoice.",
+      "required": false,
+      "scope": "document"
+    },
+    {
+      "name": "cgst_amount",
+      "type": "number",
+      "description": "Central GST amount charged on the invoice.",
+      "required": false,
+      "scope": "document"
+    },
+    {
+      "name": "sgst_rate",
+      "type": "number",
+      "description": "State GST percentage applied to the invoice.",
+      "required": false,
+      "scope": "document"
+    },
+    {
+      "name": "sgst_amount",
+      "type": "number",
+      "description": "State GST amount charged on the invoice.",
+      "required": false,
+      "scope": "document"
+    },
+    {
+      "name": "igst_rate",
+      "type": "number",
+      "description": "Integrated GST percentage applied to an interstate invoice.",
+      "required": false,
+      "scope": "document"
+    },
+    {
+      "name": "igst_amount",
+      "type": "number",
+      "description": "Integrated GST amount charged on the invoice.",
+      "required": false,
+      "scope": "document"
+    },
+    {
+      "name": "total_tax",
+      "type": "number",
+      "description": "Combined tax amount charged on the invoice.",
+      "required": true,
+      "scope": "document"
+    },
+    {
+      "name": "total_amount",
+      "type": "number",
+      "description": "Final invoice amount including taxes and adjustments.",
+      "required": true,
+      "scope": "document"
+    },
+    {
+      "name": "amount_paid",
+      "type": "number",
+      "description": "Amount already paid by the customer.",
+      "required": false,
+      "scope": "document"
+    },
+    {
+      "name": "balance_due",
+      "type": "number",
+      "description": "Remaining amount to be paid by the customer.",
+      "required": true,
+      "scope": "document"
+    },
+    {
+      "name": "currency",
+      "type": "string",
+      "description": "Currency used for all monetary values in the invoice.",
+      "required": true,
+      "scope": "document"
+    },
+    {
+      "name": "payment_terms",
+      "type": "string",
+      "description": "Conditions defining when payment is expected.",
+      "required": false,
+      "scope": "document"
+    },
+    {
+      "name": "payment_status",
+      "type": "string",
+      "description": "Current payment state, such as unpaid, partially paid, paid or overdue.",
+      "required": true,
+      "scope": "document"
+    },
+    {
+      "name": "notes",
+      "type": "string",
+      "description": "Additional instructions or information related to the invoice.",
+      "required": false,
+      "scope": "document"
+    }
+  ],
+  "identity_fields": [
+    "invoice_number",
+    "seller_name"
+  ]
+}
