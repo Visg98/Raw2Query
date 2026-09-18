@@ -94,18 +94,6 @@ schema here.
 Ask page. Both of these route to **SQL** — the question is about values in columns,
 so the system writes a query against the generated `view_invoice`:
 
-**"List the products sold with quantities"**
-
-Returns each distinct item with its total quantity, e.g.
-
-```
-20W Adjustable Track Light - Black (TRK-20W-BLK)  — 36
-1 metre track rail - Black (RAIL-1M-BLK)          — 18
-L-joint track connector (CONN-L-TRK)              — 12
-```
-
-This only works because the line items are row-scoped. As a single blob field
-there would be nothing to `SUM` or `GROUP BY`.
 
 **"What is the total due amount across all invoices?"**
 
