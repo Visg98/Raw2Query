@@ -12,3 +12,14 @@ services:
     # Reachable from the host at http://localhost:8000 for the Vite dev server.
     ports:
       - "8000:8000"
+
+  db:
+    # ./run.sh runs Alembic, the API and the workers as host processes against
+    # DATABASE_URL=...@localhost:5432, so the db port has to be reachable from
+    # the host for local development. docker-compose.yml deliberately only
+    # `expose`s it, because publishing 0.0.0.0:5432 on the public VM would put
+    # Postgres (password `raw2query`) on the internet via DNAT, bypassing the
+    # host firewall. Bound to 127.0.0.1 here so it is not even on the LAN, and
+    # confined to this override file so it cannot reach the deployment.
+    ports:
+      - "127.0.0.1:5432:5432"

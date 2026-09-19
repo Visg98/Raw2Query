@@ -50,15 +50,6 @@ export function rejectJob(jobId) {
   return apiFetch(`/jobs/${jobId}/reject`, { method: "POST" });
 }
 
-/**
- * Re-runs extraction on the same job with the reviewer's correction folded
- * into the prompt. Replaces the staged table, so any unsaved or saved cell
- * edits are lost — the caller confirms first.
- */
-export function reextractJob(jobId, feedback) {
-  return apiFetch(`/jobs/${jobId}/reextract`, { method: "POST", json: { feedback } });
-}
-
 export function retryJob(jobId) {
   return apiFetch(`/jobs/${jobId}/retry`, { method: "POST" });
 }

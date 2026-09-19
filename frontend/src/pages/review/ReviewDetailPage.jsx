@@ -1,18 +1,16 @@
 import { useEffect, useReducer, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { confirmJob, getJobReview, patchJobReview, reextractJob, rejectJob } from "../../api/jobs";
+import { confirmJob, getJobReview, patchJobReview, rejectJob } from "../../api/jobs";
 import { listSchemas } from "../../api/schemas";
 import { searchTopics } from "../../api/topics";
 import { useToast } from "../../components/common/Toast";
-import { useJobEvents } from "../../hooks/useJobEvents";
 import { Accordion } from "../../components/common/Accordion";
 import { SchemaFieldEditor } from "../../components/SchemaFieldEditor";
 import { StatusBadge } from "../../components/common/StatusBadge";
 import { DocumentPreviewPane } from "./components/DocumentPreviewPane";
 import { ExtractedDataTable } from "./components/ExtractedDataTable";
 import { ChunkCards } from "./components/ChunkCards";
-import { ReextractPanel } from "./components/ReextractPanel";
 import { DedupBanner } from "./components/DedupBanner";
 import { SuggestedTopicsChips } from "./components/SuggestedTopicsChips";
 import { SchemaMatchSwitcher } from "./components/SchemaMatchSwitcher";
@@ -69,9 +67,9 @@ export function ReviewDetailPage() {
 
   // Seed the local draft from the server payload - once per extraction run,
   // not once per mount. Keyed on the re-extract count rather than a boolean
-  // so a completed re-extract re-seeds the table, while an ordinary refetch
-  // (every PATCH writes the response back into the cache) leaves the
-  // reviewer's in-progress edits alone.
+  // so a job re-extracted outside this screen re-seeds the table, while an
+  // ordinary refetch (every PATCH writes the response back into the cache)
+  // leaves the reviewer's in-progress edits alone.
   //
   // Field names here follow the *read* shape (suggested_topic_ids /
   // confirmed_new_topic_names) — they only translate back to JobReviewPatch's
@@ -100,6 +98,11 @@ export function ReviewDetailPage() {
   const patchMutation = useMutation({
     mutationFn: (patch) => patchJobReview(jobId, patch),
     onSuccess: (updated) => queryClient.setQueryData(["jobReview", jobId], updated),
+    // No onError here. Confirm PATCHes through this same mutation before it
+    // posts, and react-query runs the per-call callbacks *in addition to* the
+    // mutation-level ones - so a failure would raise two toasts for one
+    // failure. Each entry point reports its own instead: "Save draft" below,
+    // and confirmMutation.onError for the Confirm path.
   });
 
   const confirmMutation = useMutation({
@@ -127,40 +130,10 @@ export function ReviewDetailPage() {
       showToast("Rejected.", { variant: "info" });
       navigate("/review");
     },
+    onError: (err) => showToast(err.message || "Could not reject.", { variant: "error" }),
   });
 
-  // A re-extract puts the job back through the worker, so the page has to
-  // watch it the way the processing queue does. The SSE stream closes once
-  // the status is terminal, so the hook is only enabled for the duration of
-  // a run - flipping it back on re-runs the effect for the next one.
-  const [reextracting, setReextracting] = useState(false);
   const [chunksOpen, setChunksOpen] = useState(false);
-  const { status: liveStatus, progress: liveProgress } = useJobEvents(jobId, { enabled: reextracting });
-
-  const reextractMutation = useMutation({
-    mutationFn: (feedback) => reextractJob(jobId, feedback),
-    onSuccess: () => setReextracting(true),
-    onError: (err) => showToast(err.message || "Could not start the re-extraction.", { variant: "error" }),
-  });
-
-  // Refetch once the worker is done, whichever way it went. The seeding
-  // effect above notices the bumped re-extract count and reloads the table
-  // from the new result.
-  //
-  // No guard against reading a stale status: the endpoint commits
-  // `status = "pending"` before it responds, and this only arms once that
-  // response has landed - so an `awaiting_review` seen here is always this
-  // run finishing, even when the worker beats the SSE connection.
-  useEffect(() => {
-    if (!reextracting || (liveStatus !== "awaiting_review" && liveStatus !== "failed")) return;
-    setReextracting(false);
-    queryClient.invalidateQueries({ queryKey: ["jobReview", jobId] });
-    if (liveStatus === "failed") {
-      showToast("The re-extraction failed. The previous table is unchanged.", { variant: "error" });
-    } else {
-      showToast("Re-extracted with your feedback.", { variant: "success" });
-    }
-  }, [reextracting, liveStatus, jobId, queryClient, showToast]);
 
   if (isLoading) return <div className="page skeleton" style={{ height: 400 }} />;
   if (!review) return <div className="page empty-state">Job not found.</div>;
@@ -169,8 +142,7 @@ export function ReviewDetailPage() {
   const dedupMatch = result.dedup_match;
   // A dedup match no longer gates Confirm - duplicates are acceptable, so
   // leaving the choice untouched just keeps both records (see confirm.py).
-  const confirmDisabled =
-    confirmMutation.isPending || reextracting || review.status !== "awaiting_review";
+  const confirmDisabled = confirmMutation.isPending || review.status !== "awaiting_review";
   const isAdHoc = !draft.matchedSchemaId && Boolean(draft.proposedSchemaFields);
   const chunks = result.chunks || [];
 
@@ -223,17 +195,6 @@ export function ReviewDetailPage() {
               rows={draft.extractedData}
               confidence={result.data_confidence}
               onChange={(v) => dispatch({ type: "set_extracted_data", value: v })}
-            />
-          </div>
-
-          <div className="card" style={{ padding: "var(--space-4)" }}>
-            <h3 style={{ marginTop: 0 }}>Re-extract</h3>
-            <ReextractPanel
-              history={Array.isArray(result.reextract_history) ? result.reextract_history : []}
-              running={reextracting}
-              progress={liveProgress}
-              disabled={reextractMutation.isPending || review.status !== "awaiting_review"}
-              onSubmit={(feedback) => reextractMutation.mutate(feedback)}
             />
           </div>
 
@@ -292,7 +253,7 @@ export function ReviewDetailPage() {
             <button
               type="button"
               className="btn"
-              disabled={patchMutation.isPending || reextracting}
+              disabled={patchMutation.isPending}
               onClick={() =>
                 patchMutation.mutate(
                   {
@@ -302,7 +263,11 @@ export function ReviewDetailPage() {
                     topicIds: draft.topicIds,
                     newTopicNames: draft.newTopicNames,
                   },
-                  { onSuccess: () => showToast("Draft saved.", { variant: "success" }) },
+                  {
+                    onSuccess: () => showToast("Draft saved.", { variant: "success" }),
+                    onError: (err) =>
+                      showToast(err.message || "Could not save the draft.", { variant: "error" }),
+                  },
                 )
               }
             >

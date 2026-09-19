@@ -6,7 +6,7 @@
 #
 # Usage:
 #   ./run.sh                # start everything
-#   ./run.sh --workers 4     # run 4 worker processes instead of the default 2
+#   ./run.sh --workers 4     # run 4 worker processes instead of the default 1
 #   ./run.sh --skip-install   # skip pip/npm install (assume deps already installed)
 #   ./run.sh --no-db          # don't touch docker/Postgres (assume it's already running)
 #   ./run.sh --keep-db        # on Ctrl+C, leave the db container running
@@ -18,7 +18,11 @@ LOG_DIR="$ROOT_DIR/logs"
 VENV_DIR="$ROOT_DIR/.venv"
 FRONTEND_DIR="$ROOT_DIR/frontend"
 
-WORKERS=2
+# One worker by default because the LLM provider's request quota is per-key
+# but the pacer that respects it (app/pipeline/ratelimit.py) is per-process:
+# two workers would each believe they had the whole quota. Raise this only
+# alongside LLM_REQUESTS_PER_MINUTE on a tier with real headroom.
+WORKERS=1
 SKIP_INSTALL=0
 START_DB=1
 KEEP_DB=0
@@ -79,12 +83,12 @@ port_in_use() {
 # ---- 0. sanity checks -------------------------------------------------------
 
 if [[ ! -f "$ROOT_DIR/.env" ]]; then
-  warn "No .env found — copying .env.example. Fill in GROQ_API_KEY before extracting real documents."
+  warn "No .env found — copying .env.example. Fill in LLM_API_KEY before extracting documents."
   cp "$ROOT_DIR/.env.example" "$ROOT_DIR/.env"
 fi
 
-if ! grep -q '^GROQ_API_KEY=.\+' "$ROOT_DIR/.env" 2>/dev/null; then
-  warn "GROQ_API_KEY is empty in .env — uploads/queries that need the LLM will fail until it's set."
+if ! grep -qE '^(LLM|GEMINI)_API_KEY=.+' "$ROOT_DIR/.env" 2>/dev/null; then
+  warn "LLM_API_KEY is empty in .env — uploads/queries that need the LLM will fail until it's set."
   warn "Everything else (schemas, topics, health, the UI itself) still comes up fine without it."
 fi
 

@@ -13,7 +13,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal, get_db
-from app.models import Job, SchemaDef
+from app.models import Job, SchemaDef, Topic
 from app.pipeline.confirm import ConfirmError, confirm_job
 from app.schemas_pydantic import (
     JobConfirmRequest,
@@ -137,7 +137,24 @@ def patch_review(job_id: uuid.UUID, patch: JobReviewPatch, db: Session = Depends
         result["matched_schema_id"] = str(patch.matched_schema_id)
         result["schema_version_id"] = str(schema.versions[-1].id)
     if patch.topic_ids is not None:
-        result["suggested_topic_ids"] = [str(t) for t in patch.topic_ids]
+        # Filtered against the table rather than trusted. The review screen
+        # seeds its topic list when the page loads, so a topic deleted after
+        # that is still in the draft the Confirm button PATCHes back - and
+        # `_clear_topic_from_staged_jobs` (see routers/topics.py) has already
+        # run by then, so this write would put the dead id straight back into
+        # the staged result. `confirm_job` would then discover it as a
+        # `document_topics` foreign key violation: a 500 on Confirm, which
+        # reaches the browser as a CORS error, on a screen that never
+        # mentioned topics.
+        #
+        # Dropped silently rather than rejected, which is what deleting the
+        # topic already meant: the label is gone, so it no longer applies to
+        # this document. Refusing the confirm over it would strand the
+        # reviewer with nothing they could do from this page.
+        known = {
+            row[0] for row in db.query(Topic.id).filter(Topic.id.in_(patch.topic_ids))
+        } if patch.topic_ids else set()
+        result["suggested_topic_ids"] = [str(t) for t in patch.topic_ids if t in known]
     if patch.new_topic_names is not None:
         result["confirmed_new_topic_names"] = patch.new_topic_names
 
@@ -223,5 +240,13 @@ def retry_job(job_id: uuid.UUID, db: Session = Depends(get_db)) -> JobOut:
     job.error_message = None
     job.locked_at = None
     job.locked_by = None
+    # A manual retry is a fresh start, including for a job that gave up after
+    # MAX_RATE_LIMIT_ATTEMPTS - otherwise the counter is already exhausted and
+    # the next rate limit fails it immediately.
+    if job.progress and {"rate_limit_attempts", "retry_not_before"} & job.progress.keys():
+        progress = dict(job.progress)
+        progress.pop("rate_limit_attempts", None)
+        progress.pop("retry_not_before", None)
+        job.progress = progress
     db.commit()
     return job_out(job)

@@ -17,6 +17,7 @@ from app.models import (
     Job,
     SchemaDef,
     SchemaVersion,
+    Topic,
 )
 from app.pipeline.coerce import coerce_extracted_values
 from app.pipeline.topics_util import get_or_create_topic, get_or_create_uncategorized
@@ -125,7 +126,28 @@ def confirm_job(session: Session, job: Job, body: JobConfirmRequest) -> None:
         schema_id, schema_version_id = schema.id, version.id
     elif result.get("matched_schema_id"):
         schema_id = uuid.UUID(result["matched_schema_id"])
-        schema_version_id = uuid.UUID(result["schema_version_id"])
+        # `.get`, not `[...]`: `jobs.result` is an untyped blob a client can
+        # PATCH, so a match without a version is a 400, not a KeyError.
+        raw_version_id = result.get("schema_version_id")
+        if not raw_version_id:
+            raise ConfirmError(
+                "this document is matched to a schema but not to a schema version - "
+                "re-pick the schema on the review screen"
+            )
+        schema_version_id = uuid.UUID(raw_version_id)
+        # Checked here rather than left to the insert. Deleting a schema
+        # clears the match out of every staged job (see
+        # `_clear_schema_from_staged_jobs`), but the review screen's own
+        # schema list is seeded at page load, so a schema deleted after that
+        # can still be PATCHed back by Confirm. Without this, the stale id
+        # reaches Postgres as a `documents_schema_id_fkey` violation - an
+        # unhandled 500 the browser reports as a CORS error, rather than
+        # something the reviewer can read and act on.
+        if session.get(SchemaDef, schema_id) is None or session.get(SchemaVersion, schema_version_id) is None:
+            raise ConfirmError(
+                "the schema this document was matched to no longer exists - "
+                "pick another schema on the review screen, or confirm without one"
+            )
     # else: an ad hoc shape that wasn't saved as reusable, or no schema at
     # all - no ExtractedRecord is created. The document's content is still
     # fully captured through its chunks regardless (decision #15).
@@ -178,7 +200,24 @@ def confirm_job(session: Session, job: Job, body: JobConfirmRequest) -> None:
 
 
 def _resolve_confirmed_topic_ids(session: Session, result: dict) -> set[uuid.UUID]:
-    topic_ids = {uuid.UUID(t) for t in (result.get("suggested_topic_ids") or [])}
+    """The topics a confirm should link, filtered to the ones that still exist.
+
+    Deleting a topic clears it out of every staged job (see
+    `_clear_topic_from_staged_jobs`), but the review screen's topic list is
+    seeded at page load, so a topic deleted afterwards can still be PATCHed
+    back by Confirm. An id that no longer resolves would reach Postgres as a
+    `document_topics_topic_id_fkey` violation - an unhandled 500 that the
+    browser reports as a CORS error on the review screen. Dropped instead:
+    deleting the topic already meant the label no longer applies, and if that
+    empties the set the document falls back to `Uncategorized` below, exactly
+    as an untagged one does.
+    """
+    staged = {uuid.UUID(t) for t in (result.get("suggested_topic_ids") or [])}
+    topic_ids = (
+        {row[0] for row in session.query(Topic.id).filter(Topic.id.in_(staged))}
+        if staged
+        else set()
+    )
     for name in result.get("confirmed_new_topic_names") or []:
         topic_ids.add(get_or_create_topic(session, name).id)
     if not topic_ids:

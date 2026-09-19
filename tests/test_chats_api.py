@@ -122,8 +122,14 @@ class TestSessionCreationTiming:
 
         monkeypatch.setattr("app.routers.query.answer_query", exploding_answer_query)
         before = len(client.get("/chats").json())
-        with pytest.raises(RuntimeError):
-            client.post("/query", json={"question": "What invoices do we have?"})
+        # A 500 response, not a propagated RuntimeError: UnhandledErrorMiddleware
+        # (app/api.py) converts an unhandled exception into a response *inside*
+        # the CORS layer, so the browser gets a status it can report instead of
+        # a header-less reply it can only call a CORS failure. The exception no
+        # longer escapes the app, here or in production.
+        response = client.post("/query", json={"question": "What invoices do we have?"})
+        assert response.status_code == 500
+        assert response.json() == {"detail": "internal server error"}
         assert len(client.get("/chats").json()) == before
 
 

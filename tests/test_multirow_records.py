@@ -206,12 +206,14 @@ class TestChunkedFallbackMerge:
                 self.text = text
 
         monkeypatch.setattr(
-            extract, "chunk_by_title", lambda elements: [FakeChunk(f"chunk-{i}") for i in range(len(responses))]
+            extract,
+            "chunk_by_title",
+            lambda elements, **kwargs: [FakeChunk(f"chunk-{i}") for i in range(len(responses))],
         )
         calls = iter(responses)
         monkeypatch.setattr(extract, "llm_extract", lambda **kwargs: next(calls))
         # Long enough to take the chunked branch rather than the one-shot one.
-        return extract._extract_fields([], "x" * (extract.MAX_EXTRACT_CHARS + 1), fields)
+        return extract._extract_fields([], "x" * (extract._max_extract_chars() + 1), fields)
 
     def test_rows_concatenate_across_chunks(self, monkeypatch):
         """The regression this feature would otherwise have shipped with: the

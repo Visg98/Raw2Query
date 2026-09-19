@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useState } from "react";
+import { createPortal } from "react-dom";
 import styles from "./Toast.module.css";
 
 const ToastContext = createContext(null);
@@ -20,16 +21,35 @@ export function ToastProvider({ children }) {
     [dismiss],
   );
 
+  // Portalled to <body> rather than rendered in place. Every toast - error,
+  // success, info - has to land in the same corner, and `position: fixed`
+  // does not guarantee that on its own: a `transform`, `filter`, `backdrop-
+  // filter` or `contain` anywhere above the stack makes that ancestor the
+  // containing block, and the toast then anchors to *its* corner instead of
+  // the viewport's. That is what put some messages in the bottom right while
+  // others appeared top right. <body> can never be that ancestor, so the
+  // stack's top/right is always the viewport's top right.
   return (
     <ToastContext.Provider value={{ showToast, dismiss }}>
       {children}
-      <div className={styles.stack}>
-        {toasts.map((t) => (
-          <div key={t.id} className={`${styles.toast} ${styles[t.variant] || ""}`} onClick={() => dismiss(t.id)}>
-            {t.message}
-          </div>
-        ))}
-      </div>
+      {createPortal(
+        <div className={styles.stack} role="region" aria-label="Notifications">
+          {toasts.map((t) => (
+            <div
+              key={t.id}
+              className={`${styles.toast} ${styles[t.variant] || ""}`}
+              // Errors interrupt; a success or info note is announced without
+              // cutting off whatever the screen reader is already reading.
+              role={t.variant === "error" ? "alert" : "status"}
+              aria-live={t.variant === "error" ? "assertive" : "polite"}
+              onClick={() => dismiss(t.id)}
+            >
+              {t.message}
+            </div>
+          ))}
+        </div>,
+        document.body,
+      )}
     </ToastContext.Provider>
   );
 }

@@ -14,8 +14,8 @@ dependencies = [
     "pydantic-settings>=2.3",
     "python-dotenv>=1.0",
     "python-multipart>=0.0.9",
-    # The HTTP client for the LLM calls. The provider is Groq, which serves an
-    # OpenAI-compatible API, so this SDK talks to it via GROQ_BASE_URL.
+    # The HTTP client for the LLM calls. The provider is Gemini, which serves
+    # an OpenAI-compatible API, so this SDK talks to it via LLM_BASE_URL.
     "openai>=1.40",
     "sentence-transformers>=3.0",
     "unstructured[all-docs]>=0.15",

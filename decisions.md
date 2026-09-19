@@ -506,6 +506,77 @@ The button belongs in Topics and Schemas, not the queues. The queues are for wor
 triaged, where batch delete already applies; the thing that was missing was a way to remove a
 document *after* it was finished, from the places that list finished work.
 
+**One document did not fit in one minute's token budget, so the provider changed.** Extraction
+failed on Groq with a 429 on tokens-per-minute, and the instinct — add retries — was the wrong fix.
+The arithmetic said the pipeline could not succeed at any retry count. Measured, not estimated:
+
+| Call | Text sent | Real tokens |
+|---|---|---|
+| Schema match | 4,000 chars | 1,994 |
+| Field extraction | 12,000 chars | 5,166 |
+| Topic suggestion | 4,000 chars | 2,038 |
+| | | **9,198** |
+
+**One document cost ~9,200 tokens against a total budget of 8,000 per minute.** A retry waits for a
+budget the same document is about to overspend again. Only about a third of that was document size;
+the rest was sending the document three times, ~2,100 tokens of invisible reasoning tokens
+(`gpt-oss-120b` is a reasoning model and `max_tokens` does not bound them), and the JSON schema
+echoed into every request.
+
+Cutting tokens to fit was possible but meant permanently degrading the prompts. Gemini's free tier
+turned out to be metered differently, and that was the better lever:
+
+| | Groq `gpt-oss-120b` | Gemini `3.5-flash-lite` |
+|---|---|---|
+| Binding free-tier limit | 8,000 **tokens**/min | 15 **requests**/min |
+| Tokens per document | 9,198 | ~2,500–6,000 |
+| Documents per minute | 0.87 | **~4.3 measured end to end** |
+| Throughput vs document size | degrades | flat |
+
+**Gemini does not use fewer tokens — it uses more** (10,648 vs 9,198 on identical input; its
+tokenizer runs ~2 chars/token against Groq's ~4.2). It wins because tokens stop being the rationed
+resource. Everything below follows from that one fact:
+
+- **Requests became the currency, so calls got merged, not prompts trimmed.** Schema match and
+  topic suggestion were two "list + LLM classifies" calls over the *same* text, run back to back.
+  `llm_classify_multi` asks both in one request, taking the pipeline from three requests per
+  document to two. The tasks stay explicitly separate in prompt and schema rather than being
+  blended into one question, because one answer contaminating the other is exactly what decision
+  #20's one-focused-call-per-decision rule exists to prevent — verified with an invoice against an
+  employment-contract schema and an HR topic, neither of which leaked.
+- **`MAX_EXTRACT_CHARS` went up, from 12k to 40k.** The opposite of what the token limit wanted.
+  Each chunk of the context-limit fallback is a separate *request*, so smaller chunks cost
+  throughput and buy nothing.
+- **`MAX_CLASSIFY_CHARS` was deleted.** It existed only to cut tokens, and it cost match quality.
+- **Work already known is no longer asked.** A batch that hinted its topics, or a schema picked at
+  upload, removes that task from the merged call; when nothing is left the call is skipped
+  entirely. Verified: a topic-hinted upload with no schemas made **zero** classify calls.
+- **The pacer meters requests, from the provider's own numbers.** The 429 body carries a
+  `QuotaFailure` with the real `quotaValue` — which is how 15/min and 5/min were established — so
+  `app/pipeline/ratelimit.py` adopts the true quota instead of trusting config.
+
+Two bugs were worth the scar tissue, both of them mine, and both recorded in the module:
+
+- **Never advance a rate limiter's clock into the future.** Honouring `retry-after` by pushing the
+  window's start time ahead of now interacts fatally with a projection that clamps elapsed time
+  with `max(0.0, now - at)`: the window read empty *forever*, every iteration recomputing the same
+  wait. The symptom was 14 identical 28-second waits, a worker pinned for six and a half minutes,
+  and five queued documents that never started. A 429 now marks the window full *as of now* and
+  nothing more; per-request `retry-after` is the SDK's job.
+- **A truncated JSON-schema reply still parses, and that is the danger.** Capping `max_tokens` at
+  1024 made a 25-row invoice come back as 21 rows — valid JSON, schema-conforming, four rows
+  silently gone, on data a human was about to confirm. `max_tokens` is now a generous runaway guard
+  (8192) and `finish_reason == "length"` is a hard failure. This one is provider-independent and is
+  the single most dangerous thing found in this work.
+
+*Cost accepted:* the pacer's window is process-local, so its accounting is only truthful while one
+process is calling the provider — which is why the worker default dropped from 2 to 1. That is a
+rate-limit decision wearing the clothes of a concurrency setting, worth knowing before someone
+raises it back for throughput. And the free tier is only defensible while the corpus is synthetic:
+Google's unpaid-tier terms say human reviewers may read submitted content and to keep confidential
+information out of it, which invoices plainly are. That precondition is in `DEPLOY.md`, because
+nothing in the app can notice that a real invoice has been uploaded.
+
 ---
 
 ## Deployment decisions

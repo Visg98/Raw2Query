@@ -12,7 +12,7 @@ npm run dev
 ```
 
 Requires the FastAPI backend (`uvicorn app.api:app --reload` from the repo root, with
-Postgres + `GROQ_API_KEY` configured per the root `.env.example`) running and reachable at
+Postgres + `LLM_API_KEY` configured per the root `.env.example`) running and reachable at
 `VITE_API_BASE_URL`.
 
 ## Structure
@@ -40,6 +40,6 @@ until something like `POST /schemas/{id}/query` exists.
   fast-refresh/style warnings, no errors).
 - `npm run dev` serves and transforms every page without a runtime import error.
 - **Not yet done**: a real end-to-end run against the live backend (upload → SSE progress →
-  review → confirm → query) — the backend needs `GROQ_API_KEY` set and
+  review → confirm → query) — the backend needs `LLM_API_KEY` set and
   `docker compose up db` running, neither of which is configured in this environment. Once
   those are in place, follow §10 of the plan doc to verify end-to-end.

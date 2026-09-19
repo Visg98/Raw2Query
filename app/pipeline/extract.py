@@ -21,16 +21,29 @@ from unstructured.chunking.title import chunk_by_title
 from unstructured.documents.elements import Table
 from unstructured.partition.auto import partition
 
+from app.config import get_settings
 from app.models import Document, ExtractedRecord, Job, SchemaDef, SchemaVersion, Topic
 from app.pipeline.coerce import coerce_extracted_values
 from app.pipeline.embeddings import embed_texts
-from app.pipeline.llm import llm_classify, llm_extract
+from app.pipeline.llm import llm_classify, llm_classify_multi, llm_extract
 from app.schema_fields import FieldSpec, field_specs, name_at, split_by_scope
 
 logger = logging.getLogger(__name__)
 
 # Heuristic context-limit threshold for one-shot extraction (step 4's fallback).
-MAX_EXTRACT_CHARS = 12_000
+# Configurable, and set high on purpose: every chunk below this threshold
+# becomes its own *request*, and requests are what the provider meters (see
+# app/pipeline/ratelimit.py), so a lower value costs throughput and buys
+# nothing. Read through a function rather than bound at import time so a
+# changed setting does not need a module reload.
+def _max_extract_chars() -> int:
+    return get_settings().max_extract_chars
+
+
+# There is deliberately no separate, smaller cap for the classify calls. One
+# existed while the provider metered tokens; now that requests are what is
+# metered, trimming their prompts buys nothing and costs match quality, so they
+# get the whole document.
 
 
 def _elements_text(elements: list) -> str:
@@ -45,7 +58,13 @@ def _elements_text(elements: list) -> str:
 
 
 def _progress(job: Job, step: str, pct: int) -> None:
-    job.progress = {"step": step, "pct": pct}
+    # Merge rather than replace: `progress` also carries the worker's
+    # rate-limit attempt counter (app/worker.py), and replacing the dict here
+    # reset it on every re-run - which would have made a requeued job retry
+    # forever instead of giving up after MAX_RATE_LIMIT_ATTEMPTS.
+    progress = dict(job.progress or {})
+    progress.update({"step": step, "pct": pct})
+    job.progress = progress
 
 
 def _values_and_confidence(names: list[str]) -> dict[str, Any]:
@@ -225,7 +244,7 @@ def _extract_fields(
     # reaches the chunked fallback as well as the single-call case.
     base_instructions = _instructions_for(fields, feedback)
 
-    if len(full_text) <= MAX_EXTRACT_CHARS:
+    if len(full_text) <= _max_extract_chars():
         result = llm_extract(instructions=base_instructions, text=full_text, json_schema=json_schema)
         return _parse_extraction(fields, result)
 
@@ -240,7 +259,12 @@ def _extract_fields(
     # chunks, so they concatenate - reconciling them field-by-field the way
     # this loop used to would have collapsed a 40-line invoice into a single
     # row holding whichever line happened to come last.
-    chunks = chunk_by_title(elements)
+    #
+    # `max_characters` is passed explicitly so no single chunk can exceed the
+    # per-call size this function just decided was too big for one shot -
+    # otherwise the fallback hands the model a chunk as large as the document
+    # it was meant to split.
+    chunks = chunk_by_title(elements, max_characters=_max_extract_chars())
     merged = Extraction(values={}, confidence={})
     for chunk in chunks:
         result = llm_extract(instructions=base_instructions, text=chunk.text, json_schema=json_schema)
@@ -426,8 +450,27 @@ def run_pipeline(session: Session, job: Job) -> None:
     schema_def: SchemaDef | None = None
     schema_version: SchemaVersion | None = None
 
-    # Step 2: schema match (decision #11) - only if no schema was picked at upload.
+    # Steps 2 and 6, classified together (decisions #10/#11).
+    #
+    # Schema match and topic suggestion are independent judgements, but they ask
+    # about the *same* text, and the provider meters requests rather than
+    # tokens (see app/pipeline/ratelimit.py). Sent separately they cost two
+    # requests and transmit the document twice; merged they cost one. That is
+    # the difference between ~5 and ~7.5 documents a minute, so the topic
+    # classification happens here rather than at step 6 even though its result
+    # is not consumed until then.
+    #
+    # Either half can be unnecessary - a schema picked at upload, or a batch
+    # that already hinted its topics - so the task list is assembled first and
+    # the call is skipped entirely when nothing is left to ask.
     _progress(job, "schema_match", 15)
+
+    hinted_topic_ids: set[str] = set()
+    if document.batch is not None and document.batch.default_topic_ids:
+        hinted_topic_ids = {str(t) for t in document.batch.default_topic_ids}
+
+    tasks: list[dict[str, Any]] = []
+
     if document.schema_id is not None:
         schema_def = session.get(SchemaDef, document.schema_id)
         schema_version = document.schema_version or (
@@ -436,24 +479,60 @@ def run_pipeline(session: Session, job: Job) -> None:
     else:
         schemas = session.query(SchemaDef).all()
         if schemas:
-            options = [
+            tasks.append(
                 {
-                    "id": str(s.id),
-                    "name": s.name,
-                    "description": ", ".join(f.get("name", "") for f in (s.versions[-1].fields if s.versions else [])),
+                    "key": "schema",
+                    "instructions": "Which existing schema (document type) does this document match, if any?",
+                    "options": [
+                        {
+                            "id": str(s.id),
+                            "name": s.name,
+                            "description": ", ".join(
+                                f.get("name", "") for f in (s.versions[-1].fields if s.versions else [])
+                            ),
+                        }
+                        for s in schemas
+                    ],
+                    "allow_new": False,
                 }
-                for s in schemas
-            ]
-            classification = llm_classify(
-                instructions="Which existing schema (document type) does this document match, if any?",
-                text=full_text[:MAX_EXTRACT_CHARS],
-                options=options,
-                allow_new=False,
             )
-            selected = classification.get("selected_ids") or []
-            if selected:
-                schema_def = session.get(SchemaDef, uuid.UUID(selected[0]))
-                schema_version = schema_def.versions[-1] if schema_def and schema_def.versions else None
+
+    # A batch-level topic hint (decision #9) is already an answer, so asking the
+    # model as well spends a request to be told what we know.
+    topics = session.query(Topic).all() if not hinted_topic_ids else []
+    if topics:
+        tasks.append(
+            {
+                "key": "topics",
+                "instructions": (
+                    "Which existing topics clearly apply to this document? "
+                    "Propose a new topic only if none fit."
+                ),
+                "options": [
+                    {"id": str(t.id), "name": t.name, "description": t.description or ""} for t in topics
+                ],
+                "allow_new": True,
+            }
+        )
+
+    classified: dict[str, dict[str, Any]] = {}
+    if len(tasks) == 1:
+        # One task does not need the multi-task prompt scaffolding, and the
+        # single-task prompt is the one with years of behaviour behind it.
+        only = tasks[0]
+        classified[only["key"]] = llm_classify(
+            instructions=only["instructions"],
+            text=full_text,
+            options=only["options"],
+            allow_new=only["allow_new"],
+        )
+    elif tasks:
+        classified = llm_classify_multi(tasks=tasks, text=full_text)
+
+    selected = (classified.get("schema") or {}).get("selected_ids") or []
+    if selected:
+        schema_def = session.get(SchemaDef, uuid.UUID(selected[0]))
+        schema_version = schema_def.versions[-1] if schema_def and schema_def.versions else None
 
     # Step 3: ad hoc schema inference (decision #14) - only if step 2 found no match.
     if schema_version is None:
@@ -487,7 +566,10 @@ def run_pipeline(session: Session, job: Job) -> None:
                 "Propose a structured schema (field names, types, short descriptions) that "
                 "captures the key structured data in this document."
             ),
-            text=full_text[:MAX_EXTRACT_CHARS],
+            # Capped at the same threshold as extraction: proposing a schema
+            # from scratch needs the document's breadth, and this call only
+            # runs when no existing schema matched.
+            text=full_text[:_max_extract_chars()],
             json_schema=inference_schema,
             schema_name="proposed_schema",
         )
@@ -542,18 +624,13 @@ def run_pipeline(session: Session, job: Job) -> None:
     # Step 6: topic suggestion (decision #10). A batch-level topic hint
     # (decision #9) seeds the suggestion; it's still just a pre-filled,
     # removable chip on review, never silently final.
+    #
+    # The classification itself already happened, merged into step 2's call -
+    # see the comment there for why. This step only resolves the result, and
+    # `hinted_topic_ids` still unions in so a batch hint survives a document
+    # the model found nothing for.
     _progress(job, "topic_suggestion", 70)
-    hinted_topic_ids: set[str] = set()
-    if document.batch is not None and document.batch.default_topic_ids:
-        hinted_topic_ids = {str(t) for t in document.batch.default_topic_ids}
-    topics = session.query(Topic).all()
-    topic_options = [{"id": str(t.id), "name": t.name, "description": t.description or ""} for t in topics]
-    topic_classification = llm_classify(
-        instructions="Which existing topics clearly apply to this document? Propose a new topic only if none fit.",
-        text=full_text[:MAX_EXTRACT_CHARS],
-        options=topic_options,
-        allow_new=True,
-    )
+    topic_classification = classified.get("topics") or {}
     suggested_ids = hinted_topic_ids | set(topic_classification.get("selected_ids") or [])
     result["suggested_topic_ids"] = sorted(suggested_ids)
     if topic_classification.get("new_proposal"):

@@ -2,6 +2,12 @@
   position: fixed;
   top: var(--space-5);
   right: var(--space-5);
+  /* Pinned explicitly, not left to `auto`. Without these, a stray `inset`,
+     `bottom` or `left` inherited from a more specific rule could re-anchor
+     the stack, and a toast that is sometimes top right and sometimes bottom
+     right is worse than one that is consistently in the wrong place. */
+  bottom: auto;
+  left: auto;
   display: flex;
   /* Newest first, reading downward from the top. With the stack anchored at
      the bottom, column order put the newest toast furthest from the corner;

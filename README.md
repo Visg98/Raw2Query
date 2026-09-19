@@ -51,7 +51,7 @@ Sample documents to try it with, and two guided walkthroughs, are in
 | **ORM / migrations** | SQLAlchemy 2 + Alembic | |
 | **Document parsing** | `unstructured[all-docs]` | One parser covering every supported format, plus OCR (`tesseract`, `poppler`) for scanned pages. |
 | **Embeddings** | `sentence-transformers`, `BAAI/bge-small-en-v1.5` (384-dim) | Runs locally on CPU, so indexing costs nothing per document. |
-| **LLM** | Groq, via the OpenAI-compatible SDK | Used for schema matching, field extraction, topic suggestion, query routing, SQL generation and answer composition. Swappable by changing a base URL. |
+| **LLM** | Gemini (`gemini-3.5-flash-lite`), via the OpenAI-compatible SDK | Used for schema matching, field extraction, topic suggestion, query routing, SQL generation and answer composition. Swappable by changing a base URL. |
 | **SQL safety** | `sqlglot` + a restricted DB role | Generated SQL is parsed and rejected unless it is a single read-only `SELECT`, then executed as a role that can only read the generated views. |
 | **Frontend** | React 19 + Vite 8, React Router, TanStack Query | |
 | **Deployment** | Docker Compose behind Caddy; frontend on Netlify | Caddy terminates TLS with automatic Let's Encrypt certificates. |
@@ -113,7 +113,7 @@ more worker processes — they cannot claim the same job.
 - Docker and Docker Compose
 - Python 3.11+
 - Node.js 20.19+ or 22.12+ (for the frontend)
-- A Groq API key — free at [console.groq.com](https://console.groq.com)
+- A Gemini API key — free at [aistudio.google.com](https://aistudio.google.com)
 
 ### For a human
 
@@ -126,7 +126,7 @@ cp .env.example .env
 Put your key in `.env`:
 
 ```
-GROQ_API_KEY=gsk_...
+LLM_API_KEY=...
 ```
 
 Then start everything with one command:
@@ -153,10 +153,10 @@ Non-interactive, with a verification step after each stage. Fail on the first
 non-zero exit rather than continuing.
 
 ```bash
-# 1. Configure. GROQ_API_KEY must be set in the environment already.
+# 1. Configure. LLM_API_KEY must be set in the environment already.
 cp -n .env.example .env
-sed -i "s|^GROQ_API_KEY=.*|GROQ_API_KEY=${GROQ_API_KEY}|" .env
-grep -q '^GROQ_API_KEY=gsk_' .env || { echo "GROQ_API_KEY not set in .env"; exit 1; }
+sed -i "s|^LLM_API_KEY=.*|LLM_API_KEY=${LLM_API_KEY}|" .env
+grep -qE '^LLM_API_KEY=.+' .env || { echo "LLM_API_KEY not set in .env"; exit 1; }
 
 # 2. Database. Wait for the healthcheck - do not assume it is ready.
 docker compose up -d db

@@ -102,12 +102,42 @@ Edit `.env` and set:
 
 | Variable | Notes |
 |---|---|
-| `GROQ_API_KEY` | The LLM provider key. |
+| `LLM_API_KEY` | The Gemini API key (`GEMINI_API_KEY` also accepted). See the data-handling warning under *LLM provider* below. |
 | `QUERY_RUNNER_DB_PASSWORD` | **Set this before the first migration.** Migration 0001 bakes it into the `raw2query_query_runner` role it creates, and it must match the password inside `READONLY_DATABASE_URL`. Changing it later means re-running the migration or altering the role by hand. |
 | `DOMAIN` | e.g. `yourname.duckdns.org`. Used by Caddy for certificate issuance. |
 | `DEMO_TOKEN` | A long random string. Must match the `VITE_DEMO_TOKEN` you set in Netlify. |
 
 `.env` is git-ignored and must stay that way.
+
+### LLM provider
+
+The provider is Gemini (`gemini-3.5-flash-lite`) via its OpenAI-compatible endpoint. Two things
+about it are load-bearing for a deployment.
+
+**The free tier is only appropriate for synthetic documents.** Google's
+[API terms](https://ai.google.dev/gemini-api/terms) for the unpaid tier state that submitted
+content is used "to provide, improve, and develop Google products", that "human reviewers may
+read, annotate, and process your API input and output", and — explicitly — *"Do not submit
+sensitive, confidential, or personal information to the Unpaid Services."*
+
+This pipeline extracts invoices: vendor names, billing addresses, bank accounts, sort codes. That
+is exactly the category those terms exclude. **Before any real document is uploaded, move to a
+paid tier.** Enabling billing on the Google Cloud project behind the key is enough; the terms then
+say Google "doesn't use your prompts or responses to improve our products". No code change is
+needed. This is a precondition, not a recommendation — nothing in the app can detect that a real
+invoice has been uploaded.
+
+**The free tier meters requests, not tokens.** Measured quota is 15 requests/minute for
+`gemini-3.5-flash-lite` (5/minute for `gemini-2.5-flash`), read from the provider's own 429
+payload. At two LLM calls per document that is roughly 7 documents/minute. Set
+`LLM_REQUESTS_PER_MINUTE` to whatever your account actually reports at
+[ai.dev/rate-limit](https://ai.dev/rate-limit); the pacer in `app/pipeline/ratelimit.py` stays
+under it and corrects itself if a 429 ever reports a different number. Also check the
+**requests-per-day** quota there before any bulk run — it is the ceiling this project has not
+characterised.
+
+Keep `WORKER_REPLICAS=1` unless you raise the quota. The quota is per key but the pacer's window
+is per process, so two workers each assume they have the whole allowance.
 
 ## 4. Build and migrate
 
